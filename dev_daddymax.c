@@ -26,7 +26,7 @@ static void daddymax_queryModName(char *buffer, int bufSize)
 static void daddymax_updateDevice(unsigned char *levels)
 {
     printf("daddymax_updateDevice(%p)\n", levels);
-} /* daddymac_updateDevice */
+} /* daddymax_updateDevice */
 
 
 static int daddymax_queryExistence(void)
