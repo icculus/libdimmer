@@ -592,7 +592,7 @@ static inline void initChannelFadeStatus(struct ChannelFadeStatus *fadePtr,
 } /* initChannelFadeStatus */
 
 
-int dimmer_fade_channel(unsigned int channel,
+int dimmer_channel_fade(unsigned int channel,
                         unsigned char intensity,
                         double seconds)
 /*
@@ -657,36 +657,42 @@ int dimmer_fade_channel(unsigned int channel,
     pthread_mutex_unlock(&fadeLock);
 
     return(0);
-} /* dimmer_fade_channel */
+} /* dimmer_channel_fade */
 
 
-int dimmer_toggle_blackout(void)
+int dimmer_toggle_blackout(int shouldToggleOn)
 /*
  * First call to this bumps all channels to zero.
  * Next call restores (by bump) all channels to where they where before
  *  the blackout. Any other attempts to modify a channel's intensity will
  *  be noted, but the change will not be made during blackout.
  *
- *    params : void.
+ *    params : shouldToggleOn == nonZero to start blackout, zero to stop.
  *   returns : always returns (0);
  */
 {
     int i;
 
-    blackOutEnabled = ((blackOutEnabled) ? __false : __true);
+        /* make sure we aren't requesting the current state... */
+    if ( ((blackOutEnabled == __true)  && (shouldToggleOn == 0)) ||
+         ((blackOutEnabled == __false) && (shouldToggleOn != 0)) )
+    {
+            /* swap state. */
+        blackOutEnabled = ((blackOutEnabled) ? __false : __true);
 
-    if (blackOutEnabled)
-    {
-        blackOutEnabled = __true;
-        for (i = 0; i < devInfo.numChannels; i++)
-            devProcess_setChannel(i, 0);  /* bypass dimmer_channel_set() */
+        if (blackOutEnabled)
+        {
+            blackOutEnabled = __true;
+            for (i = 0; i < devInfo.numChannels; i++)
+                devProcess_setChannel(i, 0);  /* bypass dimmer_channel_set() */
+        } /* if */
+        else
+        {
+            blackOutEnabled = __false;
+            for (i = 0; i < devInfo.numChannels; i++)
+                dimmer_channel_set(i, rawLevels[patchTable[i]]);
+        } /* else */
     } /* if */
-    else
-    {
-        blackOutEnabled = __false;
-        for (i = 0; i < devInfo.numChannels; i++)
-            dimmer_channel_set(i, rawLevels[patchTable[i]]);
-    } /* else */
 
     return(0);
 } /* dimmer_toggle_blackout */
