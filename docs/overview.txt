@@ -70,7 +70,7 @@ PCMSG_SET_DUPLEX: "Duplex" a device. A device with two 512 channel outputs is
 
 PCMSG_QUERY_DEVMODS: Get a count of device modules.
   params    : none.
-  response  : PCMSG_COMPLIANCE, followed by (int32) count of device modules.
+  response  : (int32) count of device modules.
 
 Anything else:
  The response is PCMSG_UNKNOWN_MSG if the original message is unknown.
