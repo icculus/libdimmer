@@ -1,0 +1,147 @@
+Here's the basic rundown of what this library is doing.
+
+All dimmer communication is done through this library. It handles abstraction
+of the hardware and i/o with the device(s).
+
+DMX needs to send data at a somewhat constant speed, so to ensure this, the
+library needs to have a separate thread to constantly resend data. However,
+to add an extra layer of crash protection, we use a full process with its
+own address space. If the application using libdimmer crashes, this separate
+process will continue to update the dimmer devices while the crashed
+application reloads or whatnot. libdimmer will reconnect with this process
+when the application calls the dimmer_init() function.
+
+Communication with this process is done through named pipes. Simple messages
+are sent down the pipes are of type pcmsg_t. Needed arguments will follow
+down the pipe, and can be of variable size. Responses to the messages are sent
+down the other pipe (as each process has one pipe opened for reading, the
+other for writing), and are also of type pcmsg_t. This is usually one byte.
+
+----------------
+
+Here is a breakdown of the messages that are sent. Note that these are all
+ wrapped in functions in process_communication.c ...
+
+PCMSG_SET_CHANNEL: Set a given channel to a new level.
+  params   : (int) channel number,
+             (int8) new level. (0 for zero percent, 255 for full lighting)
+  response : for speed, no response is given.
+
+PCMSG_ARE_YOU_ALIVE: Check if something is alive on the other side of the pipe.
+  params   : none.
+  response : PCMSG_I_AM_ALIVE. This is followed by called process's ID.
+             (which may be different sizes between systems; it is
+             "sizeof (pid_t)".
+
+PCMSG_PLEASE_DIE: Politely ask a process to terminate.
+  params   : none.
+  response : PCMSG_COMPLIANCE. Then die.
+
+PCMSG_QUERY_DEVICE: Get extended info on the active device.
+  params   : none.
+  response : PCMSG_COMPLIANCE if a device is ready and we have information
+              on it. PCMSG_NON_COMPLIANCE if there's no active device.
+             This is followed by a data dump of a struct DimmerDeviceInfo
+              coming down the pipe, representing the current state of the
+              selected device. (See dimmer.h.)
+
+PCMSG_DEVICE_EXISTS: Check if a specific device is available to the library.
+  params   : (int32) number of the device. This can be from zero to the
+                      result from PCMSG_QUERY_DEVMODS.
+
+PCMSG_INIT_DEVICE: Initialize a device module. This module will become the
+                    "active device."
+  params   : (int32) device module ID.
+  response : PCMSG_NON_COMPLIANCE for bad values and failed initializations.
+             PCMSG_COMPLIANCE if the new module initialized successfully.
+             If a module was already initialized, it is deinitialized before
+             a new module is selected.
+
+PCMSG_DEINIT_DEVICE: Deinitialize the active device. There is no active device
+                      after this call.
+  params    : none.
+  response  : Always PCMSG_COMPLIANCE.
+
+PCMSG_SET_DUPLEX: "Duplex" a device. A device with two 512 channel outputs is
+                   treated as a device with one 1024 channel output when
+                   it is duplexed.
+  params    : (__boolean) should duplex?
+  response  : PCMSG_COMPLIANCE if changes accepted, PCMSG_NON_COMPLIANCE if not.
+
+PCMSG_QUERY_DEVMODS: Get a count of device modules.
+  params    : none.
+  response  : PCMSG_COMPLIANCE, followed by (int32) count of device modules.
+
+Anything else:
+ The response is PCMSG_UNKNOWN_MSG if the original message is unknown.
+ This usually represents a bug condition, or mismatched versions of the
+ library and device process.
+
+----------------
+
+The hardware i/o is abstracted into device modules. At the current time, they
+must be compiled into the library itself, but in the future I might hack up
+a good dynamic loading scheme.
+
+To add a new module, add a file named dev_mydevicename.c to the repository.
+Model it after dev_daddymax.c. Add this sort of thing to device_process.c :
+
+extern struct DimmerDeviceFunctions mydevicename_funcs;
+
+and find (devFunctions)'s definition below that, and plug your stuff in,
+so it might look something like this:
+
+static struct DimmerDeviceFunctions *devFunctions[] = {
+                                                          &daddymax_funcs,
+                                                          &mydevicename_funcs
+                                                      };
+
+----------------
+
+Here's a quick rundown of what each file does:
+boolean.h           : Just a simple data type. I miss Java. :)
+dev_daddymax.[ch]   : Device module for the "DaddyMax" equipment. This
+                       device is actually to use the kernel interface
+                       /dev/dimmer (which doesn't exist yet), so people can
+                       write kernel modules if there equipment is neither
+                       serial i/o or supported directly by the library. This
+                       is a good way to keep the library closed source and/or
+                       binary compatible and still extensible.
+device_process.[ch] : This is the code for the device process. It opens the
+                       one end of the named pipes, and handles communication
+                       with the device modules (which also run in the same
+                       process as this code). Basically, it keeps a block
+                       of memory (one byte for each channel), and in an
+                       infinite loop, keeps sending these levels to the
+                       actual hardware. DMX needs to continue to resend the
+                       data like this. As the application process sends new
+                       channel levels (via libdimmer), this process receives
+                       them, adjusts the values in the memory buffer, and
+                       carries on. The only other thing it needs to do is
+                       send information about the devices to the application.
+                       In this case, information goes from the active device
+                       module to the device process, up the named pipe to
+                       libdimmer, and possibly on to the application from
+                       there.
+dimmer.[ch]         : This is the actual world-usable API for libdimmer. This
+                       is also the only header file we'll need to distribute.
+                       Besides being the entry-point to the library from the
+                       application, most of the cool effects are calculated in
+                       here. Things like scene faders, submasters, the grand
+                       master are taken into account here. The device_process
+                       keeps a table of "cooked" levels for each channel, but
+                       the "raw" channel levels are stored here, are cooked
+                       by this code, and passed onto the device process (via
+                       the named pipe in process_communication.c) from here.
+                       This code runs in the application's address space. It
+                       is multithreaded, and a thread sits idle waiting to do
+                       fade calculations, to prevent lags and timing issues.
+
+process_communication.[ch] : This is compiled into libdimmer, and thereby
+                              the application's address space. This opens one
+                              end of the named pipes (at init time), spawns
+                              the device process, and passes messages down the
+                              pipe to the device process.
+
+// end of overview.txt ...
+
