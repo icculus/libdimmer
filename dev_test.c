@@ -36,12 +36,8 @@ static void testdev_updateDevice(unsigned char *levels)
     int max = devInfo.numChannels;
     int i;
     int j;
-    unsigned char endCoordinates[2];
     unsigned char buffer[columns * 2];
     int starCount;
-
-    lseek(cons, 2, SEEK_SET);
-    read(cons, endCoordinates, 2);
 
     buffer[0] = '[';
     buffer[1] = 7;
@@ -53,18 +49,16 @@ static void testdev_updateDevice(unsigned char *levels)
         starCount = ((int) (((double) levels[i] / 255.0) * columns)) * 2;
         starCount += 2; /* add two since '[' is first char... */
 
-        for (j = 2; j < columns * 2; j += 2)
+        for (j = 2; j < (columns - 1) * 2; j += 2)
         {
             buffer[j] = ((j < starCount) ? '*' : ' ');
             buffer[j + 1] = channelColor[i];
         } /* for */
 
-        lseek(cons, (i * columns) + 4, SEEK_SET);
+        lseek(cons, (i * (columns * 2)) + 4, SEEK_SET);
         write(cons, buffer, columns * 2);
     } /* for */
 
-    lseek(cons, 2, SEEK_SET);
-    write(cons, &endCoordinates, 2);
 } /* testdev_updateDevice */
 
 
@@ -105,8 +99,7 @@ static int setupConsole(char *tty)
             {
                 lines = br[0];
                 columns = br[1];
-#if 0
-                buf = malloc(lines * columns);
+                buf = malloc((lines * columns) * 2);
                 if (buf == NULL)
                     close(rc);
                 else
@@ -126,8 +119,6 @@ static int setupConsole(char *tty)
                     write(rc, br, 4);
                     retVal = rc;
                 } /* else */
-#endif
-            retVal = rc;  // !!! TEMP.
             } /* else */
         } /* if */
     } /* if */
@@ -176,8 +167,15 @@ static void testdev_deinitialize(void)
 
 static int testdev_channelSet(int channel, int intensity)
 {
-    channelColor[channel] = 7;   // !!! finish this.
-    return(0);
+    int retVal = -1;
+
+    if (channel < devInfo.numChannels)
+    {
+        channelColor[channel] = 7;   // !!! finish this.
+        retVal = 0;
+    } /* if */
+
+    return(retVal);
 } /* testdev_channelSet */
 
 
