@@ -1,0 +1,7 @@
+
+The DaddyMax will make you...JUMP JUMP.
+
+(Trying to build? Try "make linux" or "make win32" ...)
+
+  --The McManagement.
+
