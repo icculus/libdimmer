@@ -14,7 +14,12 @@
 #include <time.h>
 #include "boolean.h"
 #include "dimmer.h"
-#include "process_communication.h"
+
+
+    /* dimmer device modules... */
+extern struct DimmerDeviceFunctions daddymax_funcs;
+extern struct DimmerDeviceFunctions testdev_funcs;
+
 
 
 struct ChannelFadeStatus
@@ -36,14 +41,49 @@ static struct DimmerDeviceInfo devInfo;
 
 static volatile __boolean threadLiveFlag = __false;
 static pthread_t fadeThread;
+static pthread_t deviceThread;
 static pthread_mutex_t fadeLock;
 static struct ChannelFadeStatus *fadeList = NULL;
 
 static unsigned char *rawLevels = NULL;
+static unsigned char *cookedLevels = NULL;
 static int *patchTable = NULL;
 
 static unsigned char grandMasterLevel = 255;
 static __boolean blackOutEnabled = __false;
+static __boolean duplexEnabled = __false;
+
+
+    /*
+     * These elements are function pointers to other modules...
+     */
+static struct DimmerDeviceFunctions *activeModFuncs = NULL;
+static struct DimmerDeviceFunctions *devFunctions[] = {
+                                                          &daddymax_funcs,
+                                                          &testdev_funcs
+                                                      };
+
+#define TOTAL_DEVICES  \
+            (sizeof (devFunctions) / sizeof (struct DimmerDeviceFunctions *))
+
+
+static void *deviceThreadEntry(void *args)
+/*
+ * Check for new "events" endlessly.
+ *
+ *    params : args == always (NULL).
+ *   returns : Always (NULL). (terminates thread.)
+ */
+{
+    while (threadLiveFlag)      /* endless loop. */
+    {
+        if ((activeModFuncs != NULL) && (cookedLevels != NULL))
+            activeModFuncs->updateDevice(cookedLevels);
+        sched_yield();
+    } /* while */
+
+    return(NULL);
+} /* deviceThreadEntry */
 
 
 static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
@@ -136,7 +176,7 @@ static void *fadeThreadEntry(void *args)
     __boolean atLeastOneFade = __false;
     struct ChannelFadeStatus *list;
 
-    while (threadLiveFlag)  /* Thread lives until dimmer_deinit()... */
+    while (threadLiveFlag == __true)  /* live until dimmer_deinit()... */
     {
         if (pthread_mutex_lock(&fadeLock) == 0)
         {
@@ -144,55 +184,72 @@ static void *fadeThreadEntry(void *args)
             pthread_mutex_unlock(&fadeLock);
         } /* if */
 
-        if (!atLeastOneFade)      /* Only hog CPU while fades are active. */
-            sched_yield();
+//        if (atLeastOneFade == __false)  /* Only hog CPU when active fades. */
+        sched_yield();
     } /* while */
 
     return(NULL);
 } /* fadeThreadEntry */
 
 
-static int spinFadeThread(void)
+static int spinJoinableThread(pthread_t *thread, void *(*entry)(void *))
 /*
- * Spin all the threads this library needs.
+ * Use this to spin separate, joinable threads.
  *
- *   params : void.
+ *   params : thread == where to store thread handle.
+ *            entry  == entry point for thread.
  *  returns : -1 on error, 0 on success. (errno) set on error.
  */
 {
     int retVal = -1;
     pthread_attr_t attrs;
 
-    if (!threadLiveFlag)
+    pthread_attr_init(&attrs);
+    pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE);
+    retVal = pthread_create(thread, &attrs, entry, NULL);
+    pthread_attr_destroy(&attrs);
+
+    return(retVal);
+} /* spinJoinableThread */
+
+
+static int spinThreads(void)
+{
+    int retVal = -1;
+
+    pthread_mutex_init(&fadeLock, NULL);
+
+    if (threadLiveFlag == __false)
     {
         threadLiveFlag = __true;
-        pthread_attr_init(&attrs);
-        pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE);
-        retVal = pthread_create(&fadeThread, &attrs, fadeThreadEntry, NULL);
-        pthread_attr_destroy(&attrs);
+
+        if (spinJoinableThread(&fadeThread, fadeThreadEntry) != -1)
+        {
+            if (spinJoinableThread(&deviceThread, deviceThreadEntry) != -1)
+                retVal = 0;
+
+            else    /* no device thread? Kill off the first thread, too. */
+            {
+                threadLiveFlag = __false;
+                pthread_join(fadeThread, NULL);
+            } /* else */
+        } /* if */
     } /* if */
 
     return(retVal);
-} /* spinFadeThread */
+} /* spinThreads */
 
 
-static void killFadeThread(void)
-/*
- * Use this function to terminate the library's internal threads.
- *  Blocks until threads see flag and terminate.
- *
- *    params : void.
- *   returns : void.
- */
+static void killThreads(void)
 {
-    if (threadLiveFlag)
+    if (threadLiveFlag == __true)
     {
         threadLiveFlag = __false;
-
         pthread_join(fadeThread, NULL);
-        fadeThread = -1;
+        pthread_join(deviceThread, NULL);
+        pthread_mutex_destroy(&fadeLock);
     } /* if */
-} /* killFadeThread */
+} /* killThreads */
 
 
 static int checkForDevices(void)
@@ -206,7 +263,7 @@ static int checkForDevices(void)
 {
     int retVal = 0;
     int devID;
-    int max = devProcess_queryDeviceModules();
+    int max = TOTAL_DEVICES;
 
     sysInfo.devsAvailable = malloc(max * sizeof (int));
 
@@ -215,7 +272,7 @@ static int checkForDevices(void)
 
     for (devID = 0; devID < max; devID++)
     {
-        if (devProcess_queryExistence(devID) != -1)
+        if (devFunctions[devID]->queryExistence() != 0)
         {
             sysInfo.devsAvailable[retVal] = devID;
             retVal++;
@@ -246,13 +303,23 @@ static int attemptAutoInit(void)
 
     for (i = 0; (i < sysInfo.devCount) && (retVal == -1); i++)
     {
-        devProcess_queryDevModName(sysInfo.devsAvailable[i], buffer,
-                                 sizeof (buffer));
+        devFunctions[sysInfo.devsAvailable[i]]->queryModuleName(buffer,
+                                                            sizeof (buffer));
         retVal = dimmer_select_device(buffer);
     } /* for */
 
     return(retVal);
 } /* attemptAutoInit */
+
+
+static inline void deinitDevice(void)
+{
+    if (activeModFuncs != NULL)
+    {
+        activeModFuncs->deinitialize();
+        activeModFuncs = NULL;
+    } /* if */
+} /* deinitDevice */
 
 
 int dimmer_init(int autoInit)
@@ -280,17 +347,8 @@ int dimmer_init(int autoInit)
         return(-1);
     } /* if */
 
-    if (createDeviceProcess() == -1)
-        return(-1);
-
-    pthread_mutex_init(&fadeLock, NULL);
-
-    atexit(dimmer_deinit);
-
     if (checkForDevices() <= 0)
     {
-        killDeviceProcess();
-        pthread_mutex_destroy(&fadeLock);
         errno = ENODEV;
         return(-1);
     } /* if */
@@ -299,12 +357,18 @@ int dimmer_init(int autoInit)
     {
         if (attemptAutoInit() == -1)
         {
-            killDeviceProcess();
-            pthread_mutex_destroy(&fadeLock);
             errno = ENODEV;
             return(-1);
         } /* if */
     } /* if */
+
+    if (spinThreads() == -1)
+    {
+        deinitDevice();
+        return(-1);
+    } /* if */
+
+    atexit(dimmer_deinit);
 
     dimmerLibInitialized = __true;
     return(0);
@@ -320,29 +384,45 @@ void dimmer_deinit(void)
  *   returns : Always (0).
  */
 {
+    struct ChannelFadeStatus *list;
+
     if (dimmerLibInitialized)
     {
-        killFadeThread();
-        pthread_mutex_destroy(&fadeLock);
-
-        devProcess_deinitDevice();
-
-        deinitProcessCommunication();
+        killThreads();
+        deinitDevice();
 
         if (rawLevels != NULL)
-        {
             free(rawLevels);
-            rawLevels = NULL;
-        } /* if */
 
-        grandMasterLevel = 255;
-        blackOutEnabled = __false;
+        if (cookedLevels != NULL)
+            free(cookedLevels);
+
+        if (patchTable != NULL)
+            free(patchTable);
 
         if (sysInfo.devsAvailable != NULL)
             free(sysInfo.devsAvailable);
 
+        (void *) patchTable = (void *) rawLevels = (void *) cookedLevels = NULL;
+
+        grandMasterLevel = 255;
+        blackOutEnabled = __false;
+
         memset(&sysInfo, '\0', sizeof (struct DimmerSystemInfo));
         sysInfo.activeDevID = -1;
+        activeModFuncs = NULL;
+        duplexEnabled = __false;
+
+        list = fadeList;
+        while (list != NULL)
+        {
+            list = fadeList->next;
+            free(fadeList);
+            fadeList = list;
+        } /* for */
+
+            /* fadeList is returned to NULL after the above loop... */
+
         dimmerLibInitialized = __false;
     } /* if */
 } /* dimmer_deinit */
@@ -362,22 +442,25 @@ static int resize_channel_buffers(void)
  */
 {
     int i;
+    int chan = devInfo.numChannels;
 
-    killFadeThread();  /* threads can't be checking a buffer while we resize. */
+    killThreads();  /* threads can't be checking a buffer while we resize. */
 
-    rawLevels = realloc(rawLevels, sizeof (unsigned char) *
-                           devInfo.numChannels);
-    patchTable = realloc(patchTable, sizeof (int) * devInfo.numChannels);
+    cookedLevels = realloc(cookedLevels, sizeof (unsigned char) * chan);
+    rawLevels = realloc(rawLevels, sizeof (unsigned char) * chan);
+    patchTable = realloc(patchTable, sizeof (int) * chan);
 
-    if ((rawLevels == NULL) || (patchTable == NULL))
+        // !!! these should not overwrite globals prematurely.
+    if ((rawLevels == NULL) || (patchTable == NULL) || cookedLevels == NULL)
         return(-1);
 
-    memset(rawLevels, '\0', sizeof (unsigned char) * devInfo.numChannels);
+    memset(rawLevels, '\0', sizeof (unsigned char) * chan);
+    memset(cookedLevels, '\0', sizeof (unsigned char) * chan);
 
-    for (i = 0; i < devInfo.numChannels; i++)
+    for (i = 0; i < chan; i++)
         patchTable[i] = i;
 
-    if (spinFadeThread() == -1)  /* restart buffer scanners... */
+    if (spinThreads() == -1)  /* restart buffer scanners... */
         return(-1);
 
     return(0);
@@ -398,16 +481,17 @@ int dimmer_device_available(char *devName, int *devID)
  */
 {
     int i;
+    int curDevID;
     int retVal = 0;
     char buffer[100];
 
     for (i = 0; (i < sysInfo.devCount) && (!retVal); i++)
     {
-        devProcess_queryDevModName(sysInfo.devsAvailable[i], buffer,
-                                 sizeof (buffer));
+        curDevID = sysInfo.devsAvailable[i];
+        devFunctions[curDevID]->queryModuleName(buffer, sizeof (buffer));
         if (strcmp(buffer, devName) == 0)
         {
-            *devID = sysInfo.devsAvailable[i];
+            *devID = curDevID;
             retVal = -1;
         } /* if */
     } /* for */
@@ -437,8 +521,11 @@ int dimmer_select_device(char *devName)
         errno = ENODEV;
     else
     {
-        if (devProcess_initDevice(devModID) != -1)
+        if (devFunctions[devModID]->initialize() != -1)
         {
+            if (activeModFuncs != NULL)
+                activeModFuncs->deinitialize();
+            activeModFuncs = devFunctions[devModID];
             sysInfo.activeDevID = devModID;
             dimmer_query_device(&devInfo);
             resize_channel_buffers();
@@ -483,7 +570,14 @@ int dimmer_query_device(struct DimmerDeviceInfo *info)
  *            Whatever device function wants to set.
  */
 {
-    return(devProcess_queryDevice(info));
+    int retVal = -1;
+
+    if (activeModFuncs == NULL)
+        errno = ENODEV;
+    else
+        retVal = activeModFuncs->queryDevice(info);
+
+    return(retVal);
 } /* dimmer_query_device */
 
 
@@ -505,11 +599,23 @@ int dimmer_set_duplex_mode(int shouldSet)
  */
 {
     int retVal = -1;
+    __boolean wantDuplex = (shouldSet == 0) ? __false : __true;
 
-    retVal = devProcess_setDuplexMode((shouldSet == 0) ? __false : __true);
+    if (activeModFuncs == NULL)
+        errno = ENODEV;
+    else
+    {
+        if (duplexEnabled != wantDuplex)
+        {
+            retVal = activeModFuncs->setDuplexMode(duplexEnabled);
 
-    if (retVal != -1)
-        retVal = resize_channel_buffers();
+            if (retVal != -1)
+            {
+                duplexEnabled = wantDuplex;
+                retVal = resize_channel_buffers();
+            } /* if */
+        } /* if */
+    } /* else */
 
     return(retVal);
 } /* dimmer_set_duplex_mode */
@@ -535,9 +641,9 @@ int dimmer_channel_set(unsigned int channel, unsigned char intensity)
         retVal = 0;
     else
     {
-        // !!! grandmaster!
+        // !!! grandmaster/etc...!
         cookedLevel = rawLevels[patched];
-        devProcess_setChannel(patched, cookedLevel);
+        cookedLevels[patched] = cookedLevel;
         retVal = 0;
     } /* else */
 
@@ -655,13 +761,16 @@ int dimmer_channel_fade(unsigned int channel,
         return(-1);
     } /* if */
 
-    if (lastPtr != NULL)
-        lastPtr->next = fadePtr;
+    else
+    {
+        if (lastPtr != NULL)
+            lastPtr->next = fadePtr;
 
-    initChannelFadeStatus(fadePtr, channel, intensity, seconds);
+        initChannelFadeStatus(fadePtr, channel, intensity, seconds);
 
-        /* we're golden; let the fade thread go again... */
-    pthread_mutex_unlock(&fadeLock);
+            /* we're golden; let the fade thread go again... */
+        pthread_mutex_unlock(&fadeLock);
+    } /* else */
 
     return(0);
 } /* dimmer_channel_fade */
@@ -691,7 +800,7 @@ int dimmer_toggle_blackout(int shouldToggleOn)
         {
             blackOutEnabled = __true;
             for (i = 0; i < devInfo.numChannels; i++)
-                devProcess_setChannel(i, 0);  /* bypass dimmer_channel_set() */
+                cookedLevels[i] = 0;  /* bypass dimmer_channel_set() */
         } /* if */
         else
         {
