@@ -8,6 +8,8 @@
 #ifndef _INCLUDE_DIMMER_H_
 #define _INCLUDE_DIMMER_H_
 
+#include "boolean.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -40,9 +42,10 @@ struct DimmerDeviceFunctions
     int (*initialize)(void);
     void (*deinitialize)(void);
     int (*channelSet)(int channel, int intensity);
-    int (*setDuplexMode)(int shouldSet);
+    int (*setDuplexMode)(__boolean shouldSet);
 };
 
+extern unsigned char *cookedLevels;
 
 int dimmer_init(int autoInit);
 int dimmer_device_available(int idNum);
@@ -52,7 +55,6 @@ int dimmer_query_system(struct DimmerSystemInfo *info);
 int dimmer_query_device(struct DimmerDeviceInfo *info);
 int dimmer_channel_set(int channel, int intensity);
 int dimmer_fade_channel(int channel, int intensity, double seconds);
-int dimmer_crossfade_channels(int ch1, int lev1, int ch2, int lev2, double s);
 int dimmer_toggle_blackout(void);
 int dimmer_set_grand_master(int intensity);
 

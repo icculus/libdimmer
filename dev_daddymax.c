@@ -81,7 +81,7 @@ struct DimmerDeviceFunctions daddymax_funcs =   {
                                                     daddymax_queryDevice,
                                                     daddymax_initialize,
                                                     daddymax_deinitialize,
-                                                    daddymax_channelSet,
+                                                    NULL,
                                                     daddymax_setDuplexMode
                                                 };
 
