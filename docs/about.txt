@@ -1,7 +1,8 @@
 
-The DaddyMax will make you...JUMP JUMP.
+The DaddyMax will make you...JMP JMP.
 
-(Trying to build? Try "make linux" or "make win32" ...)
+(Trying to build? Try "make linux" or "make win32" ...
+ Starting fresh? Try "make clean" ...)
 
   --The McManagement.
 
