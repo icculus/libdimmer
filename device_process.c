@@ -295,7 +295,7 @@ int deviceForkEntry(void)
  *  Initialization is done here, and the processing loop begins.
  *
  *    params : void.
- *   returns : always zero.
+ *   returns : always zero. Blocks for potentially forever.
  */
 {
     if (initializeDeviceProcess())
