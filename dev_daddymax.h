@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-extern struct DeviceFunctions daddymax_funcs;
+extern struct DimmerDeviceFunctions daddymax_funcs;
 
 #ifdef __cplusplus
 }

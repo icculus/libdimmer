@@ -5,31 +5,85 @@
  *   Written by Ryan C. Gordon.
  */
 
-struct DeviceFunctions daddymax_funcs = {
-                                            daddymax_queryExistance,
-                                            daddymax_initialize,
-                                            daddymax_deinitialize,
-                                            daddymax_channelSet
-                                        };
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <string.h>
+#include "dimmer.h"
+#include "dev_daddymax.h"
 
-void daddymax_queryExistence(void)
+static struct DimmerDeviceInfo devInfo;
+
+int daddymax_queryExistence(void)
 {
+    int retVal = 0;
+    struct stat statInfo;
+
+    printf("daddymax_queryExistence()\n");
+
+    if (stat("/dev/daddymax", &statInfo) != -1)
+    {
+        if (statInfo.st_mode & S_IFCHR)  /* character device? */
+            retVal = 1;
+    } /* if */
+
+    return(retVal);
 } /* daddymax_queryExistence */
+
+
+int daddymax_queryDevice(struct DimmerDeviceInfo *info)
+{
+    printf("daddymax_queryDevice(%p)\n", info);
+    memcpy(info, &devInfo, sizeof (struct DimmerDeviceInfo));
+    return(0);
+} /* daddymax_queryDevice */
 
 
 int daddymax_initialize(void)
 {
+    printf("daddymax_initialize()\n");
+    memset(&devInfo, '\0', sizeof (struct DimmerDeviceInfo));
+
+    //open("/dev/daddymax", O_RDWR);
+    devInfo.numOutputs = 1;     /* !!! lose this later! */
+    devInfo.numChannels = 512;
+    devInfo.isDuplexed = 0;
+    return(0);
 } /* daddymax_initialize */
 
 
-int daddymax_deinitialize(void)
+void daddymax_deinitialize(void)
 {
+    printf("daddymax_deinitialize()\n");
 } /* daddymax_deinitialize */
 
 
 int daddymax_channelSet(int channel, int intensity)
 {
+    printf("daddymax_channelSet(%d, %d)\n", channel, intensity);
+    return(0);
 } /* daddymax_channelSet */
+
+
+int daddymax_setDuplexMode(int shouldSet)
+{
+    printf("daddymax_setDuplexMode(%d)\n", shouldSet);
+    return(-1);
+} /* setDuplexMode */
+
+
+    /*
+     * This struct is down here so I don't need
+     *  prototypes of all these functions...
+     */
+struct DimmerDeviceFunctions daddymax_funcs =   {
+                                                    daddymax_queryExistence,
+                                                    daddymax_queryDevice,
+                                                    daddymax_initialize,
+                                                    daddymax_deinitialize,
+                                                    daddymax_channelSet,
+                                                    daddymax_setDuplexMode
+                                                };
 
 
 /* end of dev_daddymax.c ... */
