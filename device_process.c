@@ -20,9 +20,6 @@
 
 extern struct DimmerDeviceFunctions daddymax_funcs;
 
-#warning change curDevFuncs to activeModFuncs!
-
-
 static int myPID;
 static int inPipe = 0;
 static int outPipe = 0;
@@ -34,7 +31,7 @@ static unsigned char *levels = NULL;
     /*
      * These elements are function pointers to other modules...
      */
-static struct DimmerDeviceFunctions *curDevFuncs = NULL;
+static struct DimmerDeviceFunctions *activeModFuncs = NULL;
 static struct DimmerDeviceFunctions *devFunctions[] = {
                                                           &daddymax_funcs
                                                       };
@@ -108,9 +105,9 @@ static void processMessageHandler(pcmsg_t msg)
             break;
 
         case PCMSG_QUERY_DEVICE:
-            if (curDevFuncs != NULL)
+            if (activeModFuncs != NULL)
             {
-                if (curDevFuncs->queryDevice(&devInfo) != -1)
+                if (activeModFuncs->queryDevice(&devInfo) != -1)
                     retMsg = PCMSG_COMPLIANCE;
             } /* if */
 
@@ -134,19 +131,19 @@ static void processMessageHandler(pcmsg_t msg)
             read(inPipe, &dummy, sizeof (int));
             if (devFunctions[dummy]->initialize() != -1)
             {
-                if (curDevFuncs != NULL)
-                    curDevFuncs->deinitialize();
-                curDevFuncs = devFunctions[dummy];
+                if (activeModFuncs != NULL)
+                    activeModFuncs->deinitialize();
+                activeModFuncs = devFunctions[dummy];
                 retMsg = PCMSG_COMPLIANCE;
             } /* if */
             write(outPipe, &retMsg, sizeof (pcmsg_t));
             break;
 
         case PCMSG_DEINIT_DEVICE:
-            if (curDevFuncs != NULL)
+            if (activeModFuncs != NULL)
             {
-                curDevFuncs->deinitialize();
-                curDevFuncs = NULL;
+                activeModFuncs->deinitialize();
+                activeModFuncs = NULL;
             } /* if */
             retMsg = PCMSG_COMPLIANCE;
             write(outPipe, &retMsg, sizeof (pcmsg_t));
@@ -154,11 +151,11 @@ static void processMessageHandler(pcmsg_t msg)
 
         case PCMSG_SET_DUPLEX:
             read(inPipe, &dummyBool, sizeof (__boolean));
-            if (curDevFuncs != NULL)
+            if (activeModFuncs != NULL)
             {
-                if (curDevFuncs->setDuplexMode(dummyBool) != -1)
+                if (activeModFuncs->setDuplexMode(dummyBool) != -1)
                 {
-                    curDevFuncs->queryDevice(&devInfo);
+                    activeModFuncs->queryDevice(&devInfo);
                     levels = realloc(levels,
                                 devInfo.numChannels * sizeof (unsigned char));
                     if (levels != NULL)
@@ -281,8 +278,8 @@ void deviceIOLoop(void)
     while (__true)      /* endless loop. */
     {
         checkMessages();
-        if (curDevFuncs != NULL)
-            curDevFuncs->updateDevice(levels);
+        if (activeModFuncs != NULL)
+            activeModFuncs->updateDevice(levels);
         sched_yield();
     } /* while */
 } /* deviceIOLoop */
