@@ -201,7 +201,7 @@ static int checkForDevices(void)
  *  of supported devices exist. Fill them into (sysInfo).
  *
  *     params : void.
- *    returns : total found devices.
+ *    returns : total found devices. (-1) on error.
  */
 {
     int retVal = 0;
@@ -210,9 +210,12 @@ static int checkForDevices(void)
 
     sysInfo.devsAvailable = malloc(max * sizeof (int));
 
+    if (sysInfo.devsAvailable == NULL)
+        return(-1);
+
     for (devID = 0; devID < max; devID++)
     {
-        if (devProcess_queryExistence(devID))
+        if (devProcess_queryExistence(devID) != -1)
         {
             sysInfo.devsAvailable[retVal] = devID;
             retVal++;
@@ -281,11 +284,13 @@ int dimmer_init(int autoInit)
         return(-1);
 
     pthread_mutex_init(&fadeLock, NULL);
-    
+
     atexit(dimmer_deinit);
 
-    if (checkForDevices() == -1)
+    if (checkForDevices() <= 0)
     {
+        killDeviceProcess();
+        pthread_mutex_destroy(&fadeLock);
         errno = ENODEV;
         return(-1);
     } /* if */
@@ -294,6 +299,8 @@ int dimmer_init(int autoInit)
     {
         if (attemptAutoInit() == -1)
         {
+            killDeviceProcess();
+            pthread_mutex_destroy(&fadeLock);
             errno = ENODEV;
             return(-1);
         } /* if */

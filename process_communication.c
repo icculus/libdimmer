@@ -19,6 +19,26 @@
 void deviceForkEntry(void);
 #endif
 
+ // for debugging purposes only.
+static int _read_(int handle, void *buffer, size_t bufSize)
+{
+    int retVal = read(handle, buffer, bufSize);
+    if (retVal < 0)
+        perror("process_communication::read FAILED.");
+    return(retVal);
+}
+
+
+static int _write_(int handle, void *buffer, size_t bufSize)
+{
+    int retVal = write(handle, buffer, bufSize);
+    if (retVal < 0)
+        perror("process_communication::write FAILED.");
+    return(retVal);
+}
+
+#define read _read_
+#define write _write_
 
 static pthread_t monitorThread;
 static volatile __boolean threadLiveFlag = __false;
@@ -56,7 +76,7 @@ int createDeviceProcess(void)
     int rc;
     pcmsg_t msg = PCMSG_NULL;
 
-    signal(SIGPIPE, SIG_IGN);
+//    signal(SIGPIPE, SIG_IGN);
 
     if (!createFifo())
         return(-1);
@@ -87,8 +107,8 @@ int createDeviceProcess(void)
     } /* if */
     else
     {
-        outPipe = open(FIFO1FILENAME, O_RDONLY);
-        inPipe = open(FIFO2FILENAME, O_WRONLY);
+        outPipe = open(FIFO1FILENAME, O_WRONLY);
+        inPipe = open(FIFO2FILENAME, O_RDONLY);
 
             /*
              * either of these failing usually
@@ -194,7 +214,6 @@ void killDeviceProcess(void)
 } /* killDeviceProcess */
 
 
-
 void deinitProcessCommunication(void)
 {
 } /* deinitProcessCommunication */
@@ -206,10 +225,19 @@ int initProcessCommunication(void)
 } /* initProcessCommunication */
 
 
+void ignoreExtraPipeBytes(int stream, int wasteBytes)
+{
+    unsigned char buffer[wasteBytes];
+    read(stream, buffer, wasteBytes);
+} /* ignoreExtraPipeBytes */
+
+
 void devProcess_queryDevModName(int devID, char *buffer, int bufSize)
 {
     int size;
     pcmsg_t msg = PCMSG_QUERY_DEVMODNAME;
+
+//printf("process_communication::PCMSG_QUERY_DEVMODNAME.\n");
 
     buffer[0] = '\0';   /* blank string. */
 
@@ -222,11 +250,11 @@ void devProcess_queryDevModName(int devID, char *buffer, int bufSize)
         read(inPipe, &size, sizeof (size));
 
         if (bufSize >= size)
-            read(inPipe, buffer, size);
+           read(inPipe, buffer, size);
         else
         {
             read(inPipe, buffer, bufSize);
-            #warning must handle overflows!
+            ignoreExtraPipeBytes(inPipe, size - bufSize);
         } /* else */
     } /* if */
 } /* devProcess_queryDevModName */
@@ -234,14 +262,10 @@ void devProcess_queryDevModName(int devID, char *buffer, int bufSize)
 
 void devProcess_setChannel(int channel, unsigned char level)
 {
-    struct
-    {
-        pcmsg_t _msg;
-        int _channel;
-        unsigned char _level;
-    } setChannelDetails = { PCMSG_SET_CHANNEL, channel, level };
-
-    write(outPipe, &setChannelDetails, sizeof (setChannelDetails));
+    pcmsg_t msg = PCMSG_SET_CHANNEL;
+    write(outPipe, &msg, sizeof (pcmsg_t));
+    write(outPipe, &channel, sizeof (int));
+    write(outPipe, &level, sizeof (unsigned char));
 } /* devProcess_setChannel */
 
 
@@ -249,6 +273,8 @@ int devProcess_queryDeviceModules(void)
 {
     int retVal;
     pcmsg_t msg = PCMSG_QUERY_DEVMODS;
+
+//printf("process_communication::PCMSG_QUERY_DEVMODS.\n");
 
     write(outPipe, &msg, sizeof (pcmsg_t));
     read(inPipe, &retVal, sizeof (int));
@@ -261,6 +287,8 @@ int devProcess_queryExistence(int devID)
 {
     int retVal = -1;
     pcmsg_t msg = PCMSG_DEVICE_EXISTS;
+
+//printf("process_communication::PCMSG_DEVICE_EXISTS.\n");
 
     write(outPipe, &msg, sizeof (pcmsg_t));
     write(outPipe, &devID, sizeof (int));
@@ -278,6 +306,8 @@ int devProcess_setDuplexMode(__boolean shouldSet)
     int retVal = -1;
     pcmsg_t msg = PCMSG_SET_DUPLEX;
 
+//printf("process_communication::PCMSG_SET_DUPLEX.\n");
+
     write(outPipe, &msg, sizeof (pcmsg_t));
     write(outPipe, &shouldSet, sizeof (__boolean));
 
@@ -294,9 +324,11 @@ int devProcess_queryDevice(struct DimmerDeviceInfo *info)
     int retVal = -1;
     pcmsg_t msg = PCMSG_QUERY_DEVICE;
 
-    write(outPipe, &msg, sizeof (pcmsg_t));
+//printf("process_communication::PCMSG_QUERY_DEVICE.\n");
 
+    write(outPipe, &msg, sizeof (pcmsg_t));
     read(inPipe, &msg, sizeof (pcmsg_t));
+
     if (msg == PCMSG_COMPLIANCE)
     {
         read(inPipe, info, sizeof (struct DimmerDeviceInfo));
@@ -311,6 +343,8 @@ int devProcess_initDevice(int devID)
 {
     int retVal = -1;
     pcmsg_t msg = PCMSG_INIT_DEVICE;
+
+//printf("process_communication::PCMSG_INIT_DEVICE.\n");
 
     write(outPipe, &msg, sizeof (pcmsg_t));
     write(outPipe, &devID, sizeof (int));
@@ -327,6 +361,9 @@ int devProcess_deinitDevice(void)
 {
     int retVal = 0;
     pcmsg_t msg = PCMSG_DEINIT_DEVICE;
+
+//printf("process_communication::PCMSG_DEINIT_DEVICE.\n");
+
     write(outPipe, &msg, sizeof (pcmsg_t));
     read(inPipe, &msg, sizeof (pcmsg_t));
 
@@ -335,7 +372,6 @@ int devProcess_deinitDevice(void)
 
     return(retVal);
 } /* devProcess_deinitDevice */
-
 
 /* end of process_communication.c ... */
 

@@ -5,6 +5,7 @@
  *   Written by Ryan C. Gordon.
  */
 
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -17,15 +18,38 @@
 #include "boolean.h"
 #include "process_communication.h"
 
+ // for debugging purposes only.
+static int _read_(int handle, void *buffer, size_t bufSize)
+{
+    int retVal = read(handle, buffer, bufSize);
+    if (retVal < 0)
+        perror("device_process::read FAILED.");
+    return(retVal);
+}
+
+
+static int _write_(int handle, void *buffer, size_t bufSize)
+{
+    int retVal = write(handle, buffer, bufSize);
+    if (retVal < 0)
+        perror("device_process::write FAILED.");
+    return(retVal);
+}
+
+#define read _read_
+#define write _write_
+
+
 
 extern struct DimmerDeviceFunctions daddymax_funcs;
+extern struct DimmerDeviceFunctions testdev_funcs;
+
 
 static int myPID;
 static int inPipe = 0;
 static int outPipe = 0;
 static fd_set selectSet;
 static struct timeval selectTimeout;
-static __boolean selectDataUndefined = __true;
 static unsigned char *levels = NULL;
 
     /*
@@ -33,7 +57,8 @@ static unsigned char *levels = NULL;
      */
 static struct DimmerDeviceFunctions *activeModFuncs = NULL;
 static struct DimmerDeviceFunctions *devFunctions[] = {
-                                                          &daddymax_funcs
+                                                          &daddymax_funcs,
+                                                          &testdev_funcs
                                                       };
 
 #define TOTAL_DEVICES  \
@@ -99,6 +124,7 @@ static void processMessageHandler(pcmsg_t msg)
             break;
 
         case PCMSG_PLEASE_DIE:
+printf("device_process::PCMSG_PLEASE_DIE handler.\n");
             retMsg = PCMSG_COMPLIANCE;
             write(outPipe, &retMsg, sizeof (pcmsg_t));
             exit(0);
@@ -114,14 +140,13 @@ static void processMessageHandler(pcmsg_t msg)
             write(outPipe, &retMsg, sizeof (pcmsg_t));
             if (retMsg == PCMSG_COMPLIANCE)
                 write(outPipe, &devInfo, sizeof (struct DimmerDeviceInfo));
-
             break;
 
         case PCMSG_DEVICE_EXISTS:
             read(inPipe, &dummy, sizeof (int));
             if (dummy < TOTAL_DEVICES)
             {
-                if (devFunctions[dummy]->queryExistence())
+                if (devFunctions[dummy]->queryExistence() != 0)
                     retMsg = PCMSG_COMPLIANCE;
             } /* if */
             write(outPipe, &retMsg, sizeof (pcmsg_t));
@@ -129,13 +154,13 @@ static void processMessageHandler(pcmsg_t msg)
 
         case PCMSG_INIT_DEVICE:
             read(inPipe, &dummy, sizeof (int));
-            if (devFunctions[dummy]->initialize() != -1)
-            {
-                if (activeModFuncs != NULL)
-                    activeModFuncs->deinitialize();
-                activeModFuncs = devFunctions[dummy];
+//            if (devFunctions[dummy]->initialize() != -1)
+//            {
+//                if (activeModFuncs != NULL)
+//                    activeModFuncs->deinitialize();
+//                activeModFuncs = devFunctions[dummy];
                 retMsg = PCMSG_COMPLIANCE;
-            } /* if */
+//            } /* if */
             write(outPipe, &retMsg, sizeof (pcmsg_t));
             break;
 
@@ -167,8 +192,6 @@ static void processMessageHandler(pcmsg_t msg)
 
         case PCMSG_QUERY_DEVMODS:
             dummy = TOTAL_DEVICES;
-            msg = PCMSG_COMPLIANCE;
-            write(outPipe, &msg, sizeof (pcmsg_t));
             write(outPipe, &dummy, sizeof (int));
             break;
 
@@ -187,8 +210,10 @@ static void processMessageHandler(pcmsg_t msg)
                 write(outPipe, &dummy, sizeof (int));
                 write(outPipe, nameBuffer, dummy);
             } /* else */
+            break;
 
         default:    /* ignore else. */
+printf("device_process::bogus message handler.\n");
             break;
     } /* switch */
 } /* processMessageHandler */
@@ -206,26 +231,22 @@ static void checkMessages(void)
     int rc;
     pcmsg_t msg;
 
-    if (selectDataUndefined)
-    {
-        selectTimeout.tv_sec = 0;
-        selectTimeout.tv_usec = 0;
+        /*
+         * To milk this for all the speed we can, we have the select
+         *  params set up to be module-scope, so they need not be created
+         *  everytime.
+         */
+//    selectTimeout.tv_sec = selectTimeout.tv_usec = 0;
+//    FD_ZERO(&selectSet);
+//    FD_SET(inPipe, &selectSet);
 
-        FD_ZERO(&selectSet);
-        FD_SET(inPipe, &selectSet);
-        selectDataUndefined = __false;
-    } /* if */
-
-    rc = select(FD_SETSIZE, &selectSet, NULL, NULL, &selectTimeout);
-
-    if (rc == -1)           /* error condition.         */
-        selectDataUndefined = __true;
-
-    else if (rc == 1)       /* inPipe has data to read. */
+//    rc = select(FD_SETSIZE, &selectSet, NULL, NULL, &selectTimeout);
+    
+//    if (rc == 1)       /* inPipe has data to read. */
     {
         read(inPipe, &msg, sizeof (pcmsg_t));
         processMessageHandler(msg);
-    } /* else if */
+    } /* if */
 } /* checkMessages */
 
 
@@ -242,7 +263,7 @@ static __boolean initializeDeviceProcess(void)
     pcmsg_t msg;
 
     signal(SIGTERM, sigTermHandler);
-    signal(SIGPIPE, SIG_IGN);
+// !!!    signal(SIGPIPE, SIG_IGN);
     atexit(devProcessAtExit);
 
     myPID = getpid();

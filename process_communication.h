@@ -17,6 +17,8 @@ extern "C" {
 #define FIFO1FILENAME           ".dimmerfifo1"
 #define FIFO2FILENAME           ".dimmerfifo2"
 
+#define DEVPROCESS_EXE_FILENAME "devproc.exe"
+
 typedef unsigned char pcmsg_t;
 
 #define PCMSG_NULL              0
