@@ -21,16 +21,16 @@ typedef unsigned char pcmsg_t;
 
 #define PCMSG_NULL              0
 #define PCMSG_ARE_YOU_ALIVE     1
-#define PCMSG_I_AM_ALIVE        2
-#define PCMSG_PLEASE_DIE        3
-#define PCMSG_COMPLIANCE        4
-#define PCMSG_NON_COMPLIANCE    5
-#define PCMSG_QUERY_DEVICE      6
-#define PCMSG_DEVICE_EXISTS     7
-#define PCMSG_SET_CHANNEL       8
-#define PCMSG_INIT_DEVICE       9
-#define PCMSG_DEINIT_DEVICE     10
-#define PCMSG_SET_DUPLEX        11
+#define PCMSG_COMPLIANCE        2
+#define PCMSG_NON_COMPLIANCE    3
+#define PCMSG_I_AM_ALIVE        PCMSG_COMPLIANCE
+#define PCMSG_PLEASE_DIE        4
+#define PCMSG_QUERY_DEVICE      5
+#define PCMSG_DEVICE_EXISTS     6
+#define PCMSG_SET_CHANNEL       7
+#define PCMSG_INIT_DEVICE       8
+#define PCMSG_DEINIT_DEVICE     9
+#define PCMSG_SET_DUPLEX        10
 
 int createDeviceProcess(void);
 void killDeviceProcess(void);
