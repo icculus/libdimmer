@@ -1,0 +1,36 @@
+# Makefile for building a static, win32 BASIClib  !!! For now.
+#
+#   Copyright (c) 1999 Ryan C. Gordon and Gregory S. Read.
+
+W32DIR = ./platform/win32
+
+LIBBASE = libBASIC
+LIBWHOLE = $(LIBBASE)$(MAJORVER)$(MINORVER).a
+
+OBJS = dimmer.o dev_daddymax.o
+
+CC = gcc
+LINKER = gcc
+ASM = gcc
+
+LANGUAGE = ENGLISH
+
+# Shipping command lines
+#DEFINES = -D_REENTRANT
+#CFLAGS = $(DEFINES) -Wall -fomit-frame-pointer -fno-strength-reduce -s -O3 -c -o
+#LFLAGS = $(DEFINES) -Wall -O2 -o
+#ASMFLAGS = $(DEFINES) -Wall -c -o
+
+# Debug command lines...
+DEFINES = -D_REENTRANT -DDEBUG
+CFLAGS = $(DEFINES) -Wall -g -c -o
+LFLAGS = $(DEFINES) -static -Wall -g -o
+ASMFLAGS = $(DEFINES) -Wall -c -o
+
+all : $(LIBWHOLE)
+
+$(LIBWHOLE) : $(OBJS)
+#	$(LINKER) $(LOPTIONS) $(LIBWHOLE) $(OBJS)
+
+# end of Makefile.win32 ...
+

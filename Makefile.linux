@@ -1,0 +1,43 @@
+# Makefile for building a dynamic (shared) BASIClib
+#
+#  Copyright (c) 1999 Ryan C. Gordon and Gregory S. Read.
+
+DYNLIBBASE = libdimmer.so
+DYNLIBWHOLE = $(DYNLIBBASE).$(WHOLEVERSION)
+DYNLIBMAJOR = $(DYNLIBBASE).$(MAJORVER)
+
+OBJS = dimmer.o dev_daddymax.o
+
+CC = gcc
+LINKER = gcc
+ASM = gcc
+
+LANGUAGE=ENGLISH
+
+# Use this before $(COPTIONS) on modules that use inb, outb, etc ...
+IOACCESS = -O3
+
+# Shipping command lines
+#CFLAGS = -D_REENTRANT -Wall -O3 -fPIC -fno-strength-reduce -fomit-frame-pointer -s -c -o
+#LFLAGS = -shared -Wl,-soname,$(DYNLIBMAJOR) -s -O2 -o
+#ASMOPTIONS = -Wall -c -o
+
+# Debug command lines...
+CFLAGS = -D_REENTRANT -Wall -fPIC -DDEBUG -c -g -o
+LFLAGS = -Wall -shared -Wl,-soname,$(DYNLIBMAJOR) -o
+ASMOPTIONS = -D_REENTRANT -Wall -c -o
+
+all : $(DYNLIBBASE)
+
+$(DYNLIBBASE) : $(DYNLIBMAJOR)
+	ln -sf $(DYNLIBMAJOR) $(DYNLIBBASE)
+
+$(DYNLIBMAJOR) : $(DYNLIBWHOLE)
+	ln -sf $(DYNLIBWHOLE) $(DYNLIBMAJOR)
+
+$(DYNLIBWHOLE) : $(OBJS)
+	$(LINKER) $(LFLAGS) $(DYNLIBWHOLE) $(OBJS)
+
+
+# end of Makefile.linux ...
+
