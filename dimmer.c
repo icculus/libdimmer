@@ -716,6 +716,7 @@ static inline void initChannelFadeStatus(struct ChannelFadeStatus *fadePtr,
 
             /* the easy stuff. :) */
         fadePtr->destinationLevel = intensity;
+        fadePtr->channel = channel;
     } /* else */
 } /* initChannelFadeStatus */
 
@@ -740,13 +741,15 @@ int dimmer_channel_fade(unsigned int channel,
     struct ChannelFadeStatus *fadePtr;
     struct ChannelFadeStatus *lastPtr = NULL;
     __boolean newStruct = __false;
-#warning buggy as hell...rewrite this function...
+
         /* sanity checks... */
     if ((channel >= devInfo.numChannels) || (seconds < 0.0))
     {
         errno = EINVAL;
         return(-1);
     } /* if */
+
+    channel = patchTable[channel];
 
     for (fadePtr = fadeList;
         (fadePtr != NULL) && (fadePtr->channel < channel);
@@ -755,6 +758,7 @@ int dimmer_channel_fade(unsigned int channel,
         lastPtr = fadePtr;
     } /* for */
 
+        /* this channel hasn't faded yet? Allocate a new list item... */
     if ((fadePtr == NULL) || (fadePtr->channel != channel))
     {
         newStruct = __true;
@@ -764,32 +768,37 @@ int dimmer_channel_fade(unsigned int channel,
             errno = ENOMEM;
             return(-1);
         } /* if */
-
-        fadePtr->next = ((lastPtr != NULL) ? lastPtr->next : NULL);
-        fadePtr->channel = channel;
     } /* if */
 
+        /* grabbing the ThreadLock halts the fade thread... */
     if (pthread_mutex_lock(&fadeLock) != 0)
     {
-        if (newStruct)
+        if (newStruct == __true)
             free(fadePtr);
         errno = EAGAIN;
         return(-1);
     } /* if */
 
-    else
+        /* set up the structure... */
+    initChannelFadeStatus(fadePtr, channel, intensity, seconds);
+
+        /* plug the structure into the list, if need be... */
+    if (newStruct == __true)
     {
-        if (lastPtr != NULL)
-            lastPtr->next = fadePtr;
-
-        if (fadeList == NULL)
+        if (lastPtr == NULL)        /* start of new list? */
+        {
+            fadePtr->next = NULL;
             fadeList = fadePtr;
-
-        initChannelFadeStatus(fadePtr, channel, intensity, seconds);
-
-            /* we're golden; let the fade thread go again... */
-        pthread_mutex_unlock(&fadeLock);
+        } /* if */
+        else                        /* insert item into place. */
+        {
+            fadePtr->next = lastPtr->next;
+            lastPtr->next = fadePtr;
+        } /* else */
     } /* else */
+
+        /* we're golden; let the fade thread go again... */
+    pthread_mutex_unlock(&fadeLock);
 
     return(0);
 } /* dimmer_channel_fade */
