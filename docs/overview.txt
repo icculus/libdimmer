@@ -141,7 +141,10 @@ process_communication.[ch] : This is compiled into libdimmer, and thereby
                               the application's address space. This opens one
                               end of the named pipes (at init time), spawns
                               the device process, and passes messages down the
-                              pipe to the device process.
+                              pipe to the device process. It's in a separate
+                              file just to modularize the code. A lot of this
+                              is comprised of functions that wrap the named
+                              pipe communication.
 
 // end of overview.txt ...
 
