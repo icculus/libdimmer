@@ -14,7 +14,6 @@
 #include <time.h>
 #include "boolean.h"
 #include "dimmer.h"
-#include "dev_daddymax.h"
 #include "process_communication.h"
 
 
@@ -32,7 +31,7 @@ struct ChannelFadeStatus
 
 static __boolean dimmerLibInitialized = __false;
 
-static struct DimmerSystemInfo sysInfo = {0, {0}, -1};
+static struct DimmerSystemInfo sysInfo = {0, NULL, -1};
 static struct DimmerDeviceInfo devInfo;
 
 static volatile __boolean threadLiveFlag = __false;
@@ -152,7 +151,7 @@ static void *fadeThreadEntry(void *args)
 } /* fadeThreadEntry */
 
 
-static int spinThreads(void)
+static int spinFadeThread(void)
 /*
  * Spin all the threads this library needs.
  *
@@ -173,10 +172,10 @@ static int spinThreads(void)
     } /* if */
 
     return(retVal);
-} /* spinThreads */
+} /* spinFadeThread */
 
 
-static void killThreads(void)
+static void killFadeThread(void)
 /*
  * Use this function to terminate the library's internal threads.
  *  Blocks until threads see flag and terminate.
@@ -192,7 +191,7 @@ static void killThreads(void)
         pthread_join(fadeThread, NULL);
         fadeThread = -1;
     } /* if */
-} /* killThreads */
+} /* killFadeThread */
 
 
 static int checkForDevices(void)
@@ -206,8 +205,11 @@ static int checkForDevices(void)
 {
     int retVal = 0;
     int devID;
+    int max = devProcess_queryDeviceModules();
 
-    for (devID = 0; devID < TOTAL_DEVICES; devID++)
+    sysInfo.devsAvailable = malloc(max * sizeof (int));
+
+    for (devID = 0; devID < max; devID++)
     {
         if (devProcess_queryExistence(devID))
         {
@@ -236,9 +238,14 @@ static int attemptAutoInit(void)
 {
     int i;
     int retVal = -1;
+    char buffer[50];
 
     for (i = 0; (i < sysInfo.devCount) && (retVal == -1); i++)
-        retVal = dimmer_select_device(sysInfo.devsAvailable[i]);
+    {
+        devProcess_queryDevModName(sysInfo.devsAvailable[i], buffer,
+                                 sizeof (buffer));
+        retVal = dimmer_select_device(buffer);
+    } /* for */
 
     return(retVal);
 } /* attemptAutoInit */
@@ -302,16 +309,17 @@ void dimmer_deinit(void)
  *  set everything back to its default state.
  *
  *    params : void.
- *   returns : void.
+ *   returns : Always (0).
  */
 {
     if (dimmerLibInitialized)
     {
-        killThreads();
-
+        killFadeThread();
         pthread_mutex_destroy(&fadeLock);
 
         devProcess_deinitDevice();
+
+        deinitProcessCommunication();
 
         if (rawLevels != NULL)
         {
@@ -321,10 +329,13 @@ void dimmer_deinit(void)
 
         grandMasterLevel = 255;
         blackOutEnabled = __false;
+
+        if (sysInfo.devsAvailable != NULL)
+            free(sysInfo.devsAvailable);
+
         memset(&sysInfo, '\0', sizeof (struct DimmerSystemInfo));
-        sysInfo.currentDevID = -1;
+        sysInfo.activeDevID = -1;
         dimmerLibInitialized = __false;
-        killDeviceProcess();
     } /* if */
 } /* dimmer_deinit */
 
@@ -344,7 +355,7 @@ static int resize_channel_buffers(void)
 {
     int i;
 
-    killThreads();  /* threads can't be checking a buffer while we resize. */
+    killFadeThread();  /* threads can't be checking a buffer while we resize. */
 
     rawLevels = realloc(rawLevels, sizeof (unsigned char) *
                            devInfo.numChannels);
@@ -358,14 +369,14 @@ static int resize_channel_buffers(void)
     for (i = 0; i < devInfo.numChannels; i++)
         patchTable[i] = i;
 
-    if (spinThreads() == -1)  /* restart buffer scanners... */
+    if (spinFadeThread() == -1)  /* restart buffer scanners... */
         return(-1);
 
     return(0);
 } /* resize_channel_buffers */
 
 
-int dimmer_device_available(int idNum)
+int dimmer_device_available(char *devName, int *devID)
 /*
  * In the name of code reuse, this function will check if
  *  a given device is available for use. This could be
@@ -373,25 +384,31 @@ int dimmer_device_available(int idNum)
  *  dimmer_query_system(), and then checking against
  *  devsAvailable and devCount. But we'll make your life easy. :)
  *
- *     params : idNum == device id (defined in dimmer.h) to check
- *                        for availability.
+ *     params : devName == name of device module to check for availability.
+ *              devID == filled in with ID number of device module.
  *    returns : zero if not available, non-zero if exists.
  */
 {
     int i;
     int retVal = 0;
+    char buffer[100];
 
     for (i = 0; (i < sysInfo.devCount) && (!retVal); i++)
     {
-        if (sysInfo.devsAvailable[i] == idNum)
-            retVal = 1;
+        devProcess_queryDevModName(sysInfo.devsAvailable[i], buffer,
+                                 sizeof (buffer));
+        if (strcmp(buffer, devName) == 0)
+        {
+            *devID = sysInfo.devsAvailable[i];
+            retVal = -1;
+        } /* if */
     } /* for */
 
     return(retVal);
 } /* dimmer_device_available */
 
 
-int dimmer_select_device(int idNum)
+int dimmer_select_device(char *devName)
 /*
  * Use this function to switch to a device other than the default.
  *  You can find out the default through the dimmer_query_system()
@@ -399,21 +416,22 @@ int dimmer_select_device(int idNum)
  *  unnecessary if you use the autoInit feature of dimmer_init() and
  *  don't care what specific protocol you use.
  *
- *      params : idNum == device ID (defined in dimmer.h) to select.
+ *      params : devName == device module name to select.
  *     returns : -1 on error, 0 on success. errno set.
  *       errno : ENODEV (bogus device ID number).
  *               anything else device initialization chooses to set.
  */
 {
     int retVal = -1;
+    int devModID;
 
-    if (!dimmer_device_available(idNum))
+    if (!dimmer_device_available(devName, &devModID))
         errno = ENODEV;
     else
     {
-        if (devProcess_initDevice(idNum) != -1)
+        if (devProcess_initDevice(devModID) != -1)
         {
-            sysInfo.currentDevID = idNum;
+            sysInfo.activeDevID = devModID;
             dimmer_query_device(&devInfo);
             resize_channel_buffers();
             retVal = 0;  /* success. */

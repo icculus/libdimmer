@@ -13,14 +13,16 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <sched.h>
+#include "dimmer.h"
 #include "boolean.h"
 #include "process_communication.h"
-#include "dev_daddymax.h"
 
 
-/*
- * These elements are function pointers to other modules...
- */
+extern struct DimmerDeviceFunctions daddymax_funcs;
+
+#warning change curDevFuncs to activeModFuncs!
+
+
 static int myPID;
 static int inPipe = 0;
 static int outPipe = 0;
@@ -28,11 +30,21 @@ static fd_set selectSet;
 static struct timeval selectTimeout;
 static __boolean selectDataUndefined = __true;
 static unsigned char *levels = NULL;
+
+    /*
+     * These elements are function pointers to other modules...
+     */
 static struct DimmerDeviceFunctions *curDevFuncs = NULL;
-static struct DimmerDeviceFunctions *devFunctions[TOTAL_DEVICES] =
-                                                        {
-                                                            &daddymax_funcs
-                                                        };
+static struct DimmerDeviceFunctions *devFunctions[] = {
+                                                          &daddymax_funcs
+                                                      };
+
+#define TOTAL_DEVICES  \
+            (sizeof (devFunctions) / sizeof (struct DimmerDeviceFunctions *))
+
+
+static char nameBuffer[32];
+
 
 static void devProcessAtExit(void)
 /*
@@ -136,6 +148,8 @@ static void processMessageHandler(pcmsg_t msg)
                 curDevFuncs->deinitialize();
                 curDevFuncs = NULL;
             } /* if */
+            retMsg = PCMSG_COMPLIANCE;
+            write(outPipe, &retMsg, sizeof (pcmsg_t));
             break;
 
         case PCMSG_SET_DUPLEX:
@@ -153,6 +167,29 @@ static void processMessageHandler(pcmsg_t msg)
             } /* if */
             write(outPipe, &retMsg, sizeof (pcmsg_t));
             break;
+
+        case PCMSG_QUERY_DEVMODS:
+            dummy = TOTAL_DEVICES;
+            msg = PCMSG_COMPLIANCE;
+            write(outPipe, &msg, sizeof (pcmsg_t));
+            write(outPipe, &dummy, sizeof (int));
+            break;
+
+        case PCMSG_QUERY_DEVMODNAME:
+            read(inPipe, &dummy, sizeof (int));
+
+            if ((dummy < 0) && (dummy >= TOTAL_DEVICES))
+                write(outPipe, &msg, sizeof (pcmsg_t));  /* noncompliance. */
+            else
+            {
+                msg = PCMSG_COMPLIANCE;
+                write(outPipe, &msg, sizeof (pcmsg_t));
+                devFunctions[dummy]->queryModuleName(nameBuffer,
+                                                     sizeof (nameBuffer));
+                dummy = strlen(nameBuffer) + 1;
+                write(outPipe, &dummy, sizeof (int));
+                write(outPipe, nameBuffer, dummy);
+            } /* else */
 
         default:    /* ignore else. */
             break;
@@ -244,6 +281,8 @@ void deviceIOLoop(void)
     while (__true)      /* endless loop. */
     {
         checkMessages();
+        if (curDevFuncs != NULL)
+            curDevFuncs->updateDevice(levels);
         sched_yield();
     } /* while */
 } /* deviceIOLoop */
@@ -252,27 +291,21 @@ void deviceIOLoop(void)
 #ifdef SEPARATE_BINARIES
 int main(void)
 #else
-void deviceForkEntry(void)
+int deviceForkEntry(void)
 #endif
 /*
  * This is called when the device process is fork()ed off.
  *  Initialization is done here, and the processing loop begins.
- *  This routine should never return, but call exit() if it must
- *  quit.
  *
  *    params : void.
- *   returns : void. (never returns.)
+ *   returns : always zero.
  */
 {
     if (initializeDeviceProcess())
         deviceIOLoop();
 
-#ifdef SEPARATE_BINARIES
     return(0);
-#else
-    exit(0);  /* never return. */
-#endif
-} /* deviceForkEntry */
+} /* deviceForkEntry/main */
 
 /* end of device_process.c ... */
 

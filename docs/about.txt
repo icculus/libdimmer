@@ -1,5 +1,5 @@
 
-The DaddyMax will make you...JMP JMP.
+LIBDIMMER. Love it. Touch it. Rub it ALL over your body.
 
 (Trying to build? Try "make linux" or "make win32" ...
  Starting fresh? Try "make clean" ...)

@@ -15,15 +15,11 @@ extern "C" {
 #endif
 
 
-#define DEVID_DADDYMAX   0
-#define TOTAL_DEVICES    1
-
-
 struct DimmerSystemInfo
 {
     int devCount;
-    int devsAvailable[TOTAL_DEVICES];
-    int currentDevID;
+    int *devsAvailable;
+    int activeDevID;
 };
 
 
@@ -37,19 +33,21 @@ struct DimmerDeviceInfo
 
 struct DimmerDeviceFunctions
 {
+    void (*queryModuleName)(char *buffer, int bufSize);
     int (*queryExistence)(void);
     int (*queryDevice)(struct DimmerDeviceInfo *info);
     int (*initialize)(void);
     void (*deinitialize)(void);
     int (*channelSet)(int channel, int intensity);
     int (*setDuplexMode)(__boolean shouldSet);
+    void (*updateDevice)(unsigned char *levels);
 };
 
 
-int dimmer_init(int autoInit);
 void dimmer_deinit(void);
-int dimmer_device_available(int idNum);
-int dimmer_select_device(int idNum);
+int dimmer_init(int autoInit);
+int dimmer_device_available(char *devName, int *devID);
+int dimmer_select_device(char *devName);
 int dimmer_query_system(struct DimmerSystemInfo *info);
 int dimmer_query_device(struct DimmerDeviceInfo *info);
 int dimmer_set_duplex_mode(int shouldSet);
@@ -59,7 +57,8 @@ int dimmer_toggle_blackout(void);
 int dimmer_channel_patch(int channel, int patchTo);
 int dimmer_set_grand_master(int intensity);
 
-#define dimmer_channel_bump(chan)  dimmer_channel_set(channel, 255)
+#define dimmer_channel_bump(chan)     dimmer_channel_set(channel, 255)
+#define dimmer_channel_blackout(chan) dimmer_channel_set(channel, 0)
 
 #ifdef __cplusplus
 }

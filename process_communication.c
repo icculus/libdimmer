@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include "boolean.h"
 #include "process_communication.h"
 
@@ -19,6 +20,8 @@ void deviceForkEntry(void);
 #endif
 
 
+static pthread_t monitorThread;
+static volatile __boolean threadLiveFlag = __false;
 static pid_t childProcess = 0;
 static int outPipe = -1;
 static int inPipe = -1;
@@ -68,7 +71,7 @@ int createDeviceProcess(void)
 #ifdef SEPARATE_BINARIES
         rc = execlp(DEVPROCESS_EXE_FILENAME, DEVPROCESS_EXE_FILENAME, NULL);
         if (rc == -1)
-        {
+        {            /* talk to ourselves. */
             inPipe = open(FIFO1FILENAME, O_RDONLY);
             outPipe = open(FIFO2FILENAME, O_WRONLY);
 
@@ -79,6 +82,7 @@ int createDeviceProcess(void)
         } /* if */
 #else
         deviceForkEntry();
+        exit(0);
 #endif
     } /* if */
     else
@@ -114,6 +118,54 @@ int createDeviceProcess(void)
 } /* createDeviceProcess */
 
 
+static void *monitorThreadEntry(void *args)
+{
+    return(NULL);  /* !!! write me! */
+} /* monitorThreadEntry */
+
+
+static int spinMonitorThread(void)
+/*
+ * Spin the thread that keeps spawning device processes as they die.
+ *
+ *   params : void.
+ *  returns : -1 on error, 0 on success. (errno) set on error.
+ */
+{
+    int retVal = -1;
+    pthread_attr_t attrs;
+
+    if (!threadLiveFlag)
+    {
+        threadLiveFlag = __true;
+        pthread_attr_init(&attrs);
+        pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE);
+        retVal = pthread_create(&monitorThread, &attrs,
+                                monitorThreadEntry, NULL);
+        pthread_attr_destroy(&attrs);
+    } /* if */
+
+    return(retVal);
+} /* spinMonitorThread */
+
+
+static void killMonitorThread(void)
+/*
+ * Use this function to terminate the library's internal threads.
+ *  Blocks until threads see flag and terminate.
+ *
+ *    params : void.
+ *   returns : void.
+ */
+{
+    if (threadLiveFlag)
+    {
+        threadLiveFlag = __false;
+        pthread_join(monitorThread, NULL);
+    } /* if */
+} /* killFadeThread */
+
+
 void killDeviceProcess(void)
 /*
  * One way or another, we're gonna slaughter that child process.
@@ -123,6 +175,8 @@ void killDeviceProcess(void)
  */
 {
     pcmsg_t msg;
+
+    killMonitorThread();
 
     if ((outPipe != -1) && (inPipe != -1))
     {
@@ -140,14 +194,62 @@ void killDeviceProcess(void)
 } /* killDeviceProcess */
 
 
+
+int initProcessCommunication(void)
+{
+    return(spinMonitorThread());
+} /* initProcessCommunication */
+
+
+void devProcess_queryDevModName(int devID, char *buffer, int bufSize)
+{
+    int size;
+    pcmsg_t msg = PCMSG_QUERY_DEVMODNAME;
+
+    buffer[0] = '\0';   /* blank string. */
+
+    write(outPipe, &msg, sizeof (msg));
+    write(outPipe, &devID, sizeof (devID));
+
+    read(inPipe, &msg, sizeof (msg));
+    if (msg == PCMSG_COMPLIANCE)
+    {
+        read(inPipe, &size, sizeof (size));
+
+        if (bufSize >= size)
+            read(inPipe, buffer, size);
+        else
+        {
+            read(inPipe, buffer, bufSize);
+            #warning must handle overflows!
+        } /* else */
+    } /* if */
+} /* devProcess_queryDevModName */
+
+
 void devProcess_setChannel(int channel, unsigned char level)
 {
-    pcmsg_t msg = PCMSG_SET_CHANNEL;
+    struct
+    {
+        pcmsg_t _msg;
+        int _channel;
+        unsigned char _level;
+    } setChannelDetails = { PCMSG_SET_CHANNEL, channel, level };
+
+    write(outPipe, &setChannelDetails, sizeof (setChannelDetails));
+} /* devProcess_setChannel */
+
+
+int devProcess_queryDeviceModules(void)
+{
+    int retVal;
+    pcmsg_t msg = PCMSG_QUERY_DEVMODS;
 
     write(outPipe, &msg, sizeof (pcmsg_t));
-    write(outPipe, &channel, sizeof (int));
-    write(outPipe, &level, sizeof (unsigned char));
-} /* devProcess_setChannel */
+    read(inPipe, &retVal, sizeof (int));
+
+    return(retVal);
+} /* devProcess_queryDeviceModules */
 
 
 int devProcess_queryExistence(int devID)
@@ -216,10 +318,17 @@ int devProcess_initDevice(int devID)
 } /* devProcess_initDevice */
 
 
-void devProcess_deinitDevice(void)
+int devProcess_deinitDevice(void)
 {
+    int retVal = 0;
     pcmsg_t msg = PCMSG_DEINIT_DEVICE;
     write(outPipe, &msg, sizeof (pcmsg_t));
+    read(inPipe, &msg, sizeof (pcmsg_t));
+
+    if (msg != PCMSG_COMPLIANCE)
+        retVal = -1;
+
+    return(retVal);
 } /* devProcess_deinitDevice */
 
 

@@ -23,7 +23,7 @@ IOACCESS = -O3
 #ASMOPTIONS = -Wall -c -o
 
 # Debug command lines...
-CFLAGS = -D_REENTRANT -Wall -fPIC -DDEBUG -c -g -o
+CFLAGS = -D_REENTRANT -Wall -fPIC -DDEBUG -g
 LFLAGS = -Wall -shared -Wl,-soname,$(DYNLIBMAJOR) -o
 ASMOPTIONS = -D_REENTRANT -Wall -c -o
 
@@ -37,7 +37,6 @@ $(DYNLIBMAJOR) : $(DYNLIBWHOLE)
 
 $(DYNLIBWHOLE) : $(OBJS)
 	$(LINKER) $(LFLAGS) $(DYNLIBWHOLE) $(OBJS)
-
 
 # end of Makefile.linux ...
 
