@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <pthread.h>
+#include <sched.h>
 #include "dimmer.h"
 #include "dev_daddymax.h"
 
@@ -16,8 +18,13 @@
  */
 
 static int dimmerLibInitialized = 0;
-static struct DimmerDeviceFunctions *devFunctions[TOTAL_DEVICES] = {&daddymax_funcs};
 static struct DimmerSystemInfo sysInfo = {0, {0}, -1};
+static pthread_t comThread;
+static struct DimmerDeviceFunctions *devFunctions[TOTAL_DEVICES] =
+                                                        {
+                                                            &daddymax_funcs
+                                                        };
+
 
 
 static int checkForDevices(void)
@@ -69,6 +76,41 @@ static int attemptAutoInit(void)
 } /* attemptAutoInit */
 
 
+void *comThreadEntry(void *args)
+/*
+ * Entry point for comThread.
+ *
+ *    params : args == always (NULL).
+ *   returns : Always (NULL). (terminates thread.)
+ */
+{
+    while (1)           // !!! do nothing forever.
+        sched_yield();
+    return(NULL);
+} /* comThreadEntry */
+
+
+static int spinThreads(void)
+/*
+ * Spin all the threads this library needs. This should be called
+ *  exclusively from dimmer_init().
+ *
+ *   params : void.
+ *  returns : -1 on error, 0 on success. (errno) set on error.
+ */
+{
+    int retVal;
+    pthread_attr_t attrs;
+
+    pthread_attr_init(&attrs);
+    pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_DETACHED);
+    retVal = pthread_create(&comThread, &attrs, comThreadEntry, NULL);
+    pthread_attr_destroy(&attrs);
+
+    return(retVal);
+} /* spinThreads */
+
+
 int dimmer_init(int autoInit)
 /*
  * This function should be called before any other function in
@@ -85,11 +127,18 @@ int dimmer_init(int autoInit)
  *                          are usable.
  *    returns : -1 on error, 0 on success. (errno) is set on error.
  *      errno : EPERM (trying to call init more than once).
+ *              EAGAIN (threads wouldn't spin.)
  */
 {
     if (dimmerLibInitialized)
     {
         errno = EPERM;
+        return(-1);
+    } /* if */
+
+    if (spinThreads() == -1)
+    {
+        errno = EAGAIN;
         return(-1);
     } /* if */
 
