@@ -15,6 +15,8 @@
 #include "boolean.h"
 #include "dimmer.h"
 
+//define sched_yield() sleep(0)
+
 
     /* dimmer device modules... */
 extern struct DimmerDeviceFunctions daddymax_funcs;
@@ -95,7 +97,7 @@ static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
  *              __false otherwise.
  */
 {
-        /* check the seconds first, and if equals, check milliseconds... */
+        /* check the seconds first, and if equals, check microseconds... */
     if (t1->tv_sec > t2->tv_sec)
         return(__true);
     else if (t1->tv_sec < t2->tv_sec)
@@ -103,6 +105,16 @@ static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
     else /* equal */
         return((t1->tv_usec >= t2->tv_usec) ? __true : __false);
 } /* isPastTime */
+
+
+static void addTimevalStructs(struct timeval *toThis, struct timeval *addThis)
+{
+        // !!! how efficient is this?
+    toThis->tv_sec += addThis->tv_sec;
+    toThis->tv_usec += addThis->tv_usec;
+    toThis->tv_sec += (long) (toThis->tv_usec / 1000000L);
+    toThis->tv_usec = (long) (toThis->tv_usec % 1000000L);
+} /* addTimevalStructs */
 
 
 static inline void updateChannelFade(struct ChannelFadeStatus *list)
@@ -115,8 +127,7 @@ static inline void updateChannelFade(struct ChannelFadeStatus *list)
 {
     int change = rawLevels[list->channel] + list->levelChangeRate;
 
-    list->nextFadeTime.tv_sec += list->fadeTimeIncrement.tv_sec;
-    list->nextFadeTime.tv_usec += list->fadeTimeIncrement.tv_usec;
+    addTimevalStructs(&list->nextFadeTime, &list->fadeTimeIncrement);
 
         /* Make sure we don't go past destination level... */
     if (list->levelChangeRate < 0)            /* lights are dimming? */
@@ -137,7 +148,7 @@ static inline void updateChannelFade(struct ChannelFadeStatus *list)
 } /* updateChannelFade */
 
 
-static inline __boolean runFadeList(struct ChannelFadeStatus *list)
+static inline __boolean runFadeList(void)
 /*
  * Run through the entire pending list of fades once.
  *
@@ -147,10 +158,11 @@ static inline __boolean runFadeList(struct ChannelFadeStatus *list)
 {
     __boolean retVal = __false;
     struct timeval currentTime;
+    struct ChannelFadeStatus *list;
 
     for (list = fadeList; list != NULL; list = list->next)
     {
-        if (list->fadeActive)
+        if (list->fadeActive == __true)
         {
             gettimeofday(&currentTime, NULL);
             if (isPastTime(&currentTime, &list->nextFadeTime))
@@ -174,13 +186,12 @@ static void *fadeThreadEntry(void *args)
  */
 {
     __boolean atLeastOneFade = __false;
-    struct ChannelFadeStatus *list;
 
     while (threadLiveFlag == __true)  /* live until dimmer_deinit()... */
     {
         if (pthread_mutex_lock(&fadeLock) == 0)
         {
-            atLeastOneFade = runFadeList(list);
+            atLeastOneFade = runFadeList();
             pthread_mutex_unlock(&fadeLock);
         } /* if */
 
@@ -443,8 +454,10 @@ static int resize_channel_buffers(void)
 {
     int i;
     int chan = devInfo.numChannels;
+    __boolean threadsRunning = threadLiveFlag;
 
-    killThreads();  /* threads can't be checking a buffer while we resize. */
+    if (threadsRunning)
+        killThreads(); /* threads can't be checking buffers while we resize. */
 
     cookedLevels = realloc(cookedLevels, sizeof (unsigned char) * chan);
     rawLevels = realloc(rawLevels, sizeof (unsigned char) * chan);
@@ -460,8 +473,11 @@ static int resize_channel_buffers(void)
     for (i = 0; i < chan; i++)
         patchTable[i] = i;
 
-    if (spinThreads() == -1)  /* restart buffer scanners... */
-        return(-1);
+    if (threadsRunning)
+    {
+        if (spinThreads() == -1)  /* restart buffer scanners... */
+            return(-1);
+    } /* if */
 
     return(0);
 } /* resize_channel_buffers */
@@ -693,8 +709,7 @@ static inline void initChannelFadeStatus(struct ChannelFadeStatus *fadePtr,
              *  from now on by the fade thread.
              */
         gettimeofday(&fadePtr->nextFadeTime, NULL);
-        fadePtr->nextFadeTime.tv_sec += fadePtr->fadeTimeIncrement.tv_sec;
-        fadePtr->nextFadeTime.tv_usec += fadePtr->fadeTimeIncrement.tv_usec;
+        addTimevalStructs(&fadePtr->nextFadeTime, &fadePtr->fadeTimeIncrement);
 
             /* fade up or fade down? */
         fadePtr->levelChangeRate = ((totalChange > 0) ? 1 : -1);
@@ -725,7 +740,7 @@ int dimmer_channel_fade(unsigned int channel,
     struct ChannelFadeStatus *fadePtr;
     struct ChannelFadeStatus *lastPtr = NULL;
     __boolean newStruct = __false;
-
+#warning buggy as hell...rewrite this function...
         /* sanity checks... */
     if ((channel >= devInfo.numChannels) || (seconds < 0.0))
     {
@@ -740,7 +755,7 @@ int dimmer_channel_fade(unsigned int channel,
         lastPtr = fadePtr;
     } /* for */
 
-    if ((fadePtr = NULL) || (fadePtr->channel != channel))
+    if ((fadePtr == NULL) || (fadePtr->channel != channel))
     {
         newStruct = __true;
         fadePtr = calloc(1, sizeof (struct ChannelFadeStatus));
@@ -749,7 +764,8 @@ int dimmer_channel_fade(unsigned int channel,
             errno = ENOMEM;
             return(-1);
         } /* if */
-        fadePtr->next = lastPtr->next;
+
+        fadePtr->next = ((lastPtr != NULL) ? lastPtr->next : NULL);
         fadePtr->channel = channel;
     } /* if */
 
@@ -765,6 +781,9 @@ int dimmer_channel_fade(unsigned int channel,
     {
         if (lastPtr != NULL)
             lastPtr->next = fadePtr;
+
+        if (fadeList == NULL)
+            fadeList = fadePtr;
 
         initChannelFadeStatus(fadePtr, channel, intensity, seconds);
 
