@@ -195,6 +195,11 @@ void killDeviceProcess(void)
 
 
 
+void deinitProcessCommunication(void)
+{
+} /* deinitProcessCommunication */
+
+
 int initProcessCommunication(void)
 {
     return(spinMonitorThread());
