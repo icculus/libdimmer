@@ -55,6 +55,7 @@ static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
  *              __false otherwise.
  */
 {
+        /* check the seconds first, and if equals, check milliseconds... */
     if (t1->tv_sec > t2->tv_sec)
         return(__true);
     else if (t1->tv_sec < t2->tv_sec)
@@ -78,12 +79,12 @@ static inline void updateChannelFade(struct ChannelFadeStatus *list)
     list->nextFadeTime.tv_usec += list->fadeTimeIncrement.tv_usec;
 
         /* Make sure we don't go past destination level... */
-    if (list->levelChangeRate < 0)
+    if (list->levelChangeRate < 0)            /* lights are dimming? */
     {
         if (change < list->destinationLevel)
             change = list->destinationLevel;
     } /* if */
-    else
+    else                                      /* lights are brightening? */
     {
         if (change > list->destinationLevel)
             change = list->destinationLevel;
@@ -527,13 +528,68 @@ int dimmer_channel_set(unsigned int channel, unsigned char intensity)
         retVal = 0;
     else
     {
-        ;// !!! grandmaster! cookedLevel = rawLevels ;
-
+        // !!! grandmaster!
+        cookedLevel = rawLevels[patched];
         devProcess_setChannel(patched, cookedLevel);
+        retVal = 0;
     } /* else */
 
     return(retVal);
 } /* dimmer_channel_set */
+
+
+
+static inline void initChannelFadeStatus(struct ChannelFadeStatus *fadePtr,
+                                         unsigned int channel,
+                                         unsigned char intensity,
+                                         double seconds)
+/*
+ * This is called by dimmer_fade_channel() to initialize a ChannelFadeStatus
+ *  structure before it is initially passed on to the fading thread for
+ *  use. All parameters are guaranteed to be valid before this call, so
+ *  no sanity checks should be necessary here.
+ *
+ *     params : fadePtr   == struct to initialize.
+ *              channel   == channel we're fading.
+ *              intensity == raw level to fade to.
+ *              seconds   == time to fade over.
+ *    returns : void.
+ */
+{
+    double timeBetweenFades;
+    long secsBetweenFades;
+    long microsecsBetweenFades;
+    int totalChange = intensity - rawLevels[patchTable[channel]];
+
+    if (totalChange == 0)
+        fadePtr->fadeActive = __false;
+    else
+    {
+        fadePtr->fadeActive = __true;
+
+        timeBetweenFades = seconds / ((double) abs(totalChange));
+        secsBetweenFades = (long) timeBetweenFades;   /* lose fractions. */
+        microsecsBetweenFades =
+           (long) (1000000.0 * (timeBetweenFades - (double) secsBetweenFades));
+
+        fadePtr->fadeTimeIncrement.tv_sec = secsBetweenFades;
+        fadePtr->fadeTimeIncrement.tv_usec = microsecsBetweenFades;
+
+            /*
+             * Set up the first fade time here. This will be handled
+             *  from now on by the fade thread.
+             */
+        gettimeofday(&fadePtr->nextFadeTime, NULL);
+        fadePtr->nextFadeTime.tv_sec += fadePtr->fadeTimeIncrement.tv_sec;
+        fadePtr->nextFadeTime.tv_usec += fadePtr->fadeTimeIncrement.tv_usec;
+
+            /* fade up or fade down? */
+        fadePtr->levelChangeRate = ((totalChange > 0) ? 1 : -1);
+
+            /* the easy stuff. :) */
+        fadePtr->destinationLevel = intensity;
+    } /* else */
+} /* initChannelFadeStatus */
 
 
 int dimmer_fade_channel(unsigned int channel,
@@ -550,11 +606,19 @@ int dimmer_fade_channel(unsigned int channel,
  *                         it should take for light to reach (intensity).
  *      returns : -1 on error, 0 on success. (errno) set on error.
  *        errno : ENOMEM (Not enough memory for malloc).
+ *                EINVAL (bad agruments.)
  */
 {
     struct ChannelFadeStatus *fadePtr;
     struct ChannelFadeStatus *lastPtr = NULL;
     __boolean newStruct = __false;
+
+        /* sanity checks... */
+    if ((channel >= devInfo.numChannels) || (seconds < 0.0))
+    {
+        errno = EINVAL;
+        return(-1);
+    } /* if */
 
     for (fadePtr = fadeList;
         (fadePtr != NULL) && (fadePtr->channel < channel);
@@ -587,15 +651,9 @@ int dimmer_fade_channel(unsigned int channel,
     if (lastPtr != NULL)
         lastPtr->next = fadePtr;
 
-    #warning dimmer_fade_channel() need to set rates!
-    fadePtr->fadeActive = __true;
-    fadePtr->destinationLevel = intensity;
-    fadePtr->nextFadeTime.tv_sec = 0;
-    fadePtr->nextFadeTime.tv_usec = 0;
-    fadePtr->fadeTimeIncrement.tv_sec = 0;
-    fadePtr->fadeTimeIncrement.tv_usec = 0;
-    fadePtr->levelChangeRate = 0;
+    initChannelFadeStatus(fadePtr, channel, intensity, seconds);
 
+        /* we're golden; let the fade thread go again... */
     pthread_mutex_unlock(&fadeLock);
 
     return(0);
