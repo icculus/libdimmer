@@ -45,20 +45,21 @@ struct DimmerDeviceFunctions
     int (*setDuplexMode)(__boolean shouldSet);
 };
 
-extern unsigned char *cookedLevels;
 
 int dimmer_init(int autoInit);
+void dimmer_deinit(void);
 int dimmer_device_available(int idNum);
 int dimmer_select_device(int idNum);
-int dimmer_set_duplex_mode(int shouldSet);
 int dimmer_query_system(struct DimmerSystemInfo *info);
 int dimmer_query_device(struct DimmerDeviceInfo *info);
-int dimmer_channel_set(int channel, int intensity);
-int dimmer_fade_channel(int channel, int intensity, double seconds);
+int dimmer_set_duplex_mode(int shouldSet);
+int dimmer_channel_set(unsigned int channel, unsigned char intensity);
+int dimmer_fade_channel(unsigned int chan, unsigned char level, double secs);
 int dimmer_toggle_blackout(void);
+int dimmer_channel_patch(int channel, int patchTo);
 int dimmer_set_grand_master(int intensity);
 
-#define dimmer_channel_bump(chan)  dimmer_channel_set(channel, 100)
+#define dimmer_channel_bump(chan)  dimmer_channel_set(channel, 255)
 
 #ifdef __cplusplus
 }

@@ -6,7 +6,7 @@ DYNLIBBASE = libdimmer.so
 DYNLIBWHOLE = $(DYNLIBBASE).$(WHOLEVERSION)
 DYNLIBMAJOR = $(DYNLIBBASE).$(MAJORVER)
 
-OBJS = dimmer.o dev_daddymax.o
+OBJS = dimmer.o dev_daddymax.o device_process.o process_communication.o
 
 CC = gcc
 LINKER = gcc

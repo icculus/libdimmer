@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#include "boolean.h"
 #include "dimmer.h"
 #include "dev_daddymax.h"
 
@@ -65,9 +66,9 @@ int daddymax_channelSet(int channel, int intensity)
 } /* daddymax_channelSet */
 
 
-int daddymax_setDuplexMode(int shouldSet)
+int daddymax_setDuplexMode(__boolean shouldSet)
 {
-    printf("daddymax_setDuplexMode(%d)\n", shouldSet);
+    printf("daddymax_setDuplexMode(%s)\n", shouldSet ? "__true" : "__false");
     return(-1);
 } /* setDuplexMode */
 

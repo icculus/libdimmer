@@ -5,6 +5,14 @@
  *   Written by Ryan C. Gordon.
  */
 
+#include <sys/types.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sched.h>
 #include "boolean.h"
 #include "process_communication.h"
 #include "dev_daddymax.h"
@@ -13,12 +21,12 @@
 /*
  * These elements are function pointers to other modules...
  */
+static int myPID;
 static int inPipe = 0;
 static int outPipe = 0;
 static fd_set selectSet;
 static struct timeval selectTimeout;
 static __boolean selectDataUndefined = __true;
-static struct ChannelData;
 static unsigned char *levels = NULL;
 static struct DimmerDeviceFunctions *curDevFuncs = NULL;
 static struct DimmerDeviceFunctions *devFunctions[TOTAL_DEVICES] =
@@ -39,14 +47,14 @@ static void devProcessAtExit(void)
 } /* devProcessCleanup */
 
 
-static void sigTermHandler(int signal)
+static void sigTermHandler(int sig)
 /*
  * The device process receives a SIGTERM signal to request
  *  termination from the parent process. This signal handler
  *  just calls exit(), which guarantees our atexit() procedures
  *  run.
  *
- *     params : signal == should always be (SIGTERM).
+ *     params : sig == should always be (SIGTERM).
  *    returns : void. (never returns)
  */
 {
@@ -71,14 +79,14 @@ static void processMessageHandler(pcmsg_t msg)
     switch (msg)
     {
         case PCMSG_SET_CHANNEL:
-            read(inPipe, channelData, sizeof (struct ChannelData));
-            levels[channelData.channelNum] = channelData.level;
+            read(inPipe, &dummy, sizeof (int));
+            read(inPipe, &levels[dummy], sizeof (unsigned char));
             break;
 
         case PCMSG_ARE_YOU_ALIVE:
             retMsg = PCMSG_I_AM_ALIVE;
             write(outPipe, &retMsg, sizeof (pcmsg_t));
-            write(outPipe, &pid, sizeof (pid_t));
+            write(outPipe, &myPID, sizeof (pid_t));
             break;
 
         case PCMSG_PLEASE_DIE:
@@ -95,12 +103,12 @@ static void processMessageHandler(pcmsg_t msg)
             } /* if */
 
             write(outPipe, &retMsg, sizeof (pcmsg_t));
-            if (retMsg = PCMSG_COMPLIANCE)
+            if (retMsg == PCMSG_COMPLIANCE)
                 write(outPipe, &devInfo, sizeof (struct DimmerDeviceInfo));
 
             break;
 
-        case PCMSG_DEVICE_EXISTS;
+        case PCMSG_DEVICE_EXISTS:
             read(inPipe, &dummy, sizeof (int));
             if (dummy < TOTAL_DEVICES)
             {
@@ -120,6 +128,14 @@ static void processMessageHandler(pcmsg_t msg)
                 retMsg = PCMSG_COMPLIANCE;
             } /* if */
             write(outPipe, &retMsg, sizeof (pcmsg_t));
+            break;
+
+        case PCMSG_DEINIT_DEVICE:
+            if (curDevFuncs != NULL)
+            {
+                curDevFuncs->deinitialize();
+                curDevFuncs = NULL;
+            } /* if */
             break;
 
         case PCMSG_SET_DUPLEX:
@@ -161,12 +177,12 @@ static void checkMessages(void)
         selectTimeout.tv_sec = 0;
         selectTimeout.tv_usec = 0;
 
-        FD_ZERO(&set);
-        FD_SET(inPipe, &set);
+        FD_ZERO(&selectSet);
+        FD_SET(inPipe, &selectSet);
         selectDataUndefined = __false;
     } /* if */
 
-    rc = select(FD_SETSIZE, &set, NULL, NULL, &timeout);
+    rc = select(FD_SETSIZE, &selectSet, NULL, NULL, &selectTimeout);
 
     if (rc == -1)           /* error condition.         */
         selectDataUndefined = __true;
@@ -190,11 +206,12 @@ static __boolean initializeDeviceProcess(void)
  */
 {
     pcmsg_t msg;
-    int pid = getpid();
 
     signal(SIGTERM, sigTermHandler);
     signal(SIGPIPE, SIG_IGN);
     atexit(devProcessAtExit);
+
+    myPID = getpid();
 
     inPipe = open(FIFO1FILENAME, O_RDONLY);
     outPipe = open(FIFO2FILENAME, O_WRONLY);
@@ -212,7 +229,24 @@ static __boolean initializeDeviceProcess(void)
         return(__false);
 
     processMessageHandler(msg);
+    return(__true);
 } /* initializedDeviceProcess */
+
+
+void deviceIOLoop(void)
+/*
+ * Check for new "events" endlessly.
+ *
+ *    params : void.
+ *   returns : void.  (never returns).
+ */
+{
+    while (__true)      /* endless loop. */
+    {
+        checkMessages();
+        sched_yield();
+    } /* while */
+} /* deviceIOLoop */
 
 
 #ifdef SEPARATE_BINARIES
@@ -234,9 +268,9 @@ void deviceForkEntry(void)
         deviceIOLoop();
 
 #ifdef SEPARATE_BINARIES
-    exit(0);  /* never return. */
-#else
     return(0);
+#else
+    exit(0);  /* never return. */
 #endif
 } /* deviceForkEntry */
 

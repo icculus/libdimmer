@@ -11,44 +11,40 @@
 #include <pthread.h>
 #include <sched.h>
 #include <sys/time.h>
+#include <time.h>
 #include "boolean.h"
 #include "dimmer.h"
 #include "dev_daddymax.h"
+#include "process_communication.h"
 
 
-struct
+struct ChannelFadeStatus
 {
-    __boolean fadeActive;                       /* are we fading this one?      */
-    unsigned int channel;
-    unsigned char destinationLevel;       /* What level should it end at? */
-    struct timeval nextFadeTime;
-    struct timeval fadeTimeIncrement;
-    int levelChangeRate;
-    struct ChannelFadeStatus *next;
-} ChannelFadeStatus;
+    __boolean fadeActive;               /* are we fading this one?          */
+    unsigned int channel;               /* channel number to fade.          */
+    unsigned char destinationLevel;     /* What level should it end at?     */
+    struct timeval nextFadeTime;        /* time after epoch for next fade.  */
+    struct timeval fadeTimeIncrement;   /* Amount of time between fades.    */
+    int levelChangeRate;                /* Amount to fade with each update. */
+    struct ChannelFadeStatus *next;     /* Next struct in linked list.      */
+};
 
 
-static __boolean dimmerLibInitialized = 0;
+static __boolean dimmerLibInitialized = __false;
 
 static struct DimmerSystemInfo sysInfo = {0, {0}, -1};
 static struct DimmerDeviceInfo devInfo;
 
-static volatile __boolean threadLiveFlag = 1;
-static pthread_t fadeThread = -1;
-static pthread_mutex_t fadeLock = -1;
+static volatile __boolean threadLiveFlag = __false;
+static pthread_t fadeThread;
+static pthread_mutex_t fadeLock;
 static struct ChannelFadeStatus *fadeList = NULL;
 
 static unsigned char *rawLevels = NULL;
 static int *patchTable = NULL;
 
 static unsigned char grandMasterLevel = 255;
-static unsigned __boolean blackOutEnabled = 0;
-
-static int deviceProcess = 0;
-
-/* internal prototype... */
-static void dimmer_deinit(void);
-
+static __boolean blackOutEnabled = __false;
 
 
 static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
@@ -60,28 +56,30 @@ static inline __boolean isPastTime(struct timeval *t1, struct timeval *t2)
  *              __false otherwise.
  */
 {
-    if (t1.tv_sec > t2.tv_sec)
+    if (t1->tv_sec > t2->tv_sec)
         return(__true);
-    else if (t1.tv_sec < t2.tv_sec)
+    else if (t1->tv_sec < t2->tv_sec)
         return(__false);
     else /* equal */
-        return((t1.tv_usec >= t2.tv_usec) ? __true : __false);
+        return((t1->tv_usec >= t2->tv_usec) ? __true : __false);
 } /* isPastTime */
 
 
 static inline void updateChannelFade(struct ChannelFadeStatus *list)
 /*
- * Update a ChannelFadeStructure. Make actual changes to dimmers.
+ * Update a ChannelFadeStatus structure. Make actual changes to dimmers.
  *
  *    params : list == struct to update.
  *   returns : void.
  */
 {
-    change = rawLevels[list->channel] + list->levelChangeRate;
-    list->nextFadeTime += list->fadeTimeIncrement;
+    int change = rawLevels[list->channel] + list->levelChangeRate;
+
+    list->nextFadeTime.tv_sec += list->fadeTimeIncrement.tv_sec;
+    list->nextFadeTime.tv_usec += list->fadeTimeIncrement.tv_usec;
 
         /* Make sure we don't go past destination level... */
-    if ((list->levelChangeRate < 0)
+    if (list->levelChangeRate < 0)
     {
         if (change < list->destinationLevel)
             change = list->destinationLevel;
@@ -92,10 +90,10 @@ static inline void updateChannelFade(struct ChannelFadeStatus *list)
             change = list->destinationLevel;
     } /* else */
 
-    if (change = list->destinationLevel)        /* done with this one? */
-        list->activeFlag = __false;
+    if (change == list->destinationLevel)        /* done with this one? */
+        list->fadeActive = __false;
 
-    dimmer_set_channel(list->channel, change);   /* do actual update. */
+    dimmer_channel_set(list->channel, (unsigned char) change); /* do update. */
 } /* updateChannelFade */
 
 
@@ -108,7 +106,6 @@ static inline __boolean runFadeList(struct ChannelFadeStatus *list)
  */
 {
     __boolean retVal = __false;
-    int change;
     struct timeval currentTime;
 
     for (list = fadeList; list != NULL; list = list->next)
@@ -116,7 +113,7 @@ static inline __boolean runFadeList(struct ChannelFadeStatus *list)
         if (list->fadeActive)
         {
             gettimeofday(&currentTime, NULL);
-            if (isPastTime(currentTime, nextFadeTime))
+            if (isPastTime(&currentTime, &list->nextFadeTime))
             {
                 updateChannelFade(list);
                 retVal = __true;
@@ -168,10 +165,10 @@ static int spinThreads(void)
 
     if (!threadLiveFlag)
     {
-        threadLiveFlag = 1;
+        threadLiveFlag = __true;
         pthread_attr_init(&attrs);
         pthread_attr_setdetachstate(&attrs, PTHREAD_CREATE_JOINABLE);
-        retVal = pthread_create(&fadeThread, &attrs, comThreadEntry, NULL);
+        retVal = pthread_create(&fadeThread, &attrs, fadeThreadEntry, NULL);
         pthread_attr_destroy(&attrs);
     } /* if */
 
@@ -190,9 +187,9 @@ static void killThreads(void)
 {
     if (threadLiveFlag)
     {
-        threadLiveFlag = 0;
+        threadLiveFlag = __false;
 
-        pthread_join(fadeThread);
+        pthread_join(fadeThread, NULL);
         fadeThread = -1;
     } /* if */
 } /* killThreads */
@@ -313,13 +310,8 @@ void dimmer_deinit(void)
         killThreads();
 
         pthread_mutex_destroy(&fadeLock);
-        fadeLock = -1;
 
-        if (curDevFuncs != NULL)
-        {
-            curDevFuncs->deinitialize();
-            curDevFuncs = NULL;
-        } /* if */
+        devProcess_deinitDevice();
 
         if (rawLevels != NULL)
         {
@@ -329,10 +321,10 @@ void dimmer_deinit(void)
 
         grandMasterLevel = 255;
         blackOutEnabled = __false;
-        memset(sysInfo, '\0', sizeof (struct DimmerSystemInfo));
+        memset(&sysInfo, '\0', sizeof (struct DimmerSystemInfo));
         sysInfo.currentDevID = -1;
         dimmerLibInitialized = __false;
-        destroyDeviceProcess();
+        killDeviceProcess();
     } /* if */
 } /* dimmer_deinit */
 
@@ -350,6 +342,8 @@ static int resize_channel_buffers(void)
  *              ENODEV (No device selected.)
  */
 {
+    int i;
+
     killThreads();  /* threads can't be checking a buffer while we resize. */
 
     rawLevels = realloc(rawLevels, sizeof (unsigned char) *
@@ -420,7 +414,7 @@ int dimmer_select_device(int idNum)
         if (devProcess_initDevice(idNum) != -1)
         {
             sysInfo.currentDevID = idNum;
-            query_device_info(&devInfo);
+            dimmer_query_device(&devInfo);
             resize_channel_buffers();
             retVal = 0;  /* success. */
         } /* if */
@@ -580,8 +574,8 @@ int dimmer_fade_channel(unsigned int channel,
     fadePtr->destinationLevel = intensity;
     fadePtr->nextFadeTime.tv_sec = 0;
     fadePtr->nextFadeTime.tv_usec = 0;
-    fadePtr->fadeTimeIncrement.tv_sec
-    fadePtr->fadeTimeIncrement.tv_usec
+    fadePtr->fadeTimeIncrement.tv_sec = 0;
+    fadePtr->fadeTimeIncrement.tv_usec = 0;
     fadePtr->levelChangeRate = 0;
 
     pthread_mutex_unlock(&fadeLock);
@@ -603,26 +597,26 @@ int dimmer_toggle_blackout(void)
 {
     int i;
 
-    blackoutEnabled = ((blackoutEnabled) ? __false : __true);
+    blackOutEnabled = ((blackOutEnabled) ? __false : __true);
 
-    if (blackoutEnabled)
+    if (blackOutEnabled)
     {
-        blackoutEnabled = __true;
+        blackOutEnabled = __true;
         for (i = 0; i < devInfo.numChannels; i++)
-            devProcess_setChannel(i, 0);  /* bypass dimmer_set_channel() */
+            devProcess_setChannel(i, 0);  /* bypass dimmer_channel_set() */
     } /* if */
     else
     {
-        blackoutEnabled = __false;
+        blackOutEnabled = __false;
         for (i = 0; i < devInfo.numChannels; i++)
-            dimmer_set_channel(i, rawLevels[patchTable[i]]);
+            dimmer_channel_set(i, rawLevels[patchTable[i]]);
     } /* else */
 
     return(0);
-} /* dimmer_blackout */
+} /* dimmer_toggle_blackout */
 
 
-int dimmer_set_channel_patch(int channel, int patchTo)
+int dimmer_channel_patch(int channel, int patchTo)
 /*
  * Define a channel patch. Any time access is attempted on
  *  (channel), it'll actually use (patchTo) instead.
@@ -650,7 +644,7 @@ int dimmer_set_channel_patch(int channel, int patchTo)
         } /* if */
     } /* else */
     return(retVal);
-} /* dimmer_set_channel_patch */
+} /* dimmer_channel_patch */
 
 
 int dimmer_set_grand_master(int intensity)

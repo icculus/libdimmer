@@ -9,8 +9,14 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 #include "boolean.h"
-#include "device_process.h"
+#include "process_communication.h"
+
+#ifndef SEPARATE_BINARIES
+void deviceForkEntry(void);
+#endif
 
 
 static pid_t childProcess = 0;
@@ -91,7 +97,8 @@ int createDeviceProcess(void)
             return(-1);
         } /* if */
 
-        write(outPipe, PCMSG_ARE_YOU_ALIVE);
+        msg = PCMSG_ARE_YOU_ALIVE;
+        write(outPipe, &msg, sizeof (pcmsg_t));
         read(inPipe, &msg, sizeof (pcmsg_t));
         if (msg != PCMSG_I_AM_ALIVE)
         {
@@ -138,6 +145,7 @@ void devProcess_setChannel(int channel, unsigned char level)
     pcmsg_t msg = PCMSG_SET_CHANNEL;
 
     write(outPipe, &msg, sizeof (pcmsg_t));
+    write(outPipe, &channel, sizeof (int));
     write(outPipe, &level, sizeof (unsigned char));
 } /* devProcess_setChannel */
 
@@ -151,7 +159,7 @@ int devProcess_queryExistence(int devID)
     write(outPipe, &devID, sizeof (int));
 
     read(inPipe, &msg, sizeof (pcmsg_t));
-    if (msg == MSG_COMPLIANCE)
+    if (msg == PCMSG_COMPLIANCE)
         retVal = 0;
 
     return(retVal);
@@ -167,7 +175,7 @@ int devProcess_setDuplexMode(__boolean shouldSet)
     write(outPipe, &shouldSet, sizeof (__boolean));
 
     read(inPipe, &msg, sizeof (pcmsg_t));
-    if (msg == MSG_COMPLIANCE)
+    if (msg == PCMSG_COMPLIANCE)
         retVal = 0;
 
     return(retVal);
@@ -182,7 +190,7 @@ int devProcess_queryDevice(struct DimmerDeviceInfo *info)
     write(outPipe, &msg, sizeof (pcmsg_t));
 
     read(inPipe, &msg, sizeof (pcmsg_t));
-    if (msg == MSG_COMPLIANCE)
+    if (msg == PCMSG_COMPLIANCE)
     {
         read(inPipe, info, sizeof (struct DimmerDeviceInfo));
         retVal = 0;
@@ -201,11 +209,19 @@ int devProcess_initDevice(int devID)
     write(outPipe, &devID, sizeof (int));
 
     read(inPipe, &msg, sizeof (pcmsg_t));
-    if (msg == MSG_COMPLIANCE)
+    if (msg == PCMSG_COMPLIANCE)
         retVal = 0;
 
     return(retVal);
 } /* devProcess_initDevice */
+
+
+void devProcess_deinitDevice(void)
+{
+    pcmsg_t msg = PCMSG_DEINIT_DEVICE;
+    write(outPipe, &msg, sizeof (pcmsg_t));
+} /* devProcess_deinitDevice */
+
 
 /* end of process_communication.c ... */
 
